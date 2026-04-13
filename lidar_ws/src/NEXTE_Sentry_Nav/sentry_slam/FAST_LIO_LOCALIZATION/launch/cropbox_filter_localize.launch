@@ -1,0 +1,51 @@
+<launch>
+    <!-- CropBox filter to remove robot arm points from raw LiDAR data -->
+    <!-- This filter removes points within the bounding box (robot arm area) in LiDAR frame -->
+    <!-- Adjust min/max values according to your robot arm's position and size -->
+    <!-- For picking robot with large arm, increase the bounding box size -->
+    <node pkg="nodelet" type="nodelet" name="cropbox_filter_raw" args="standalone pcl/CropBox">
+        <remap from="~input" to="/livox/lidar" />
+        <remap from="~output" to="/livox/lidar_filtered" />
+        <rosparam>
+            min_x: -1.5   # 根据机械臂位置调整: 机械臂在机器人坐标系中的x轴最小范围
+            max_x: 1.5    # 根据机械臂位置调整: 机械臂在机器人坐标系中的x轴最大范围
+            min_y: -1.5   # 根据机械臂位置调整: 机械臂在机器人坐标系中的y轴最小范围
+            max_y: 1.5   # 根据机械臂位置调整: 机械臂在机器人坐标系中的y轴最大范围
+            min_z: -3.0  # 根据机械臂位置调整: 机械臂在机器人坐标系中的z轴最小范围
+            max_z: 3.0    # 根据机械臂位置调整: 机械臂在机器人坐标系中的z轴最大范围
+            negative: true  # true: 保留框外点（移除框内点，即机械臂）, false: 保留框内点
+        </rosparam>
+    </node>
+
+    <!-- Remap filtered point cloud to the topic expected by FAST-LIO -->
+    <!-- This ensures FAST-LIO receives the filtered point cloud without robot arm -->
+    <node pkg="topic_tools" type="relay" name="relay_filtered_to_livox" 
+          args="/livox/lidar_filtered /livox/lidar" />
+
+    <!-- Second CropBox filter for registered point cloud (output of FAST-LIO) -->
+    <!-- This provides additional filtering in case some arm points remain -->
+    <!-- Note: This is in map frame, parameters might need adjustment -->
+    <node pkg="nodelet" type="nodelet" name="cropbox_filter_registered" args="standalone pcl/CropBox">
+        <remap from="~input" to="/cloud_registered" />
+        <remap from="~output" to="/cloud_registered_filtered" />
+        <rosparam>
+            min_x: -1.5   # 机械臂在全局坐标系中的x轴范围（需要根据实际调整）
+            max_x: 1.5
+            min_y: -1.5   # 机械臂在全局坐标系中的y轴范围
+            max_y: 1.5
+            min_z: -3.0   # 机械臂在全局坐标系中的z轴范围
+            max_z: 3.0
+            negative: true  # 移除框内点（机械臂）
+        </rosparam>
+    </node>
+
+    <!-- Remap filtered registered point cloud to the topic expected by pointcloud_to_laserscan -->
+    <node pkg="topic_tools" type="relay" name="relay_registered_to_scan" 
+          args="/cloud_registered_filtered /cloud_registered" />
+
+    <!-- Optional: Visualization topics for debugging -->
+    <node pkg="topic_tools" type="relay" name="relay_original_livox" 
+          args="/livox/lidar /livox/lidar_original" />
+    <node pkg="topic_tools" type="relay" name="relay_original_registered" 
+          args="/cloud_registered /cloud_registered_original" />
+</launch>

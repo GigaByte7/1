@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- 将cmd_vel转换为Carry消息并发布到/RemoteControl话题 -->
+    <node pkg="vel_pkg" type="twist_to_carry.py" name="twist_to_carry" output="screen">
+        <!-- 关键：恢复为四轮差速/阿克曼模式以支持正常导航 -->
+        <param name="kinematic_mode" value="four_wheel_diff" />
+        
+        <!-- 缩放因子参数 -->
+        <param name="linear_scale" value="1000.0" />
+        <param name="angular_scale" value="1250.0" />
+        <param name="deadzone_threshold" value="0.03" />
+        <param name="angular_deadzone_threshold" value="0.03" />
+        
+        <!-- 优化参数 -->
+        <param name="filter_cutoff_freq" value="8.0" />
+        <param name="max_accel_linear" value="6.0" />
+        <param name="max_accel_angular" value="3.0" />
+        <param name="publish_rate" value="50.0" />
+        
+        <!-- 转向参数 -->
+        <param name="max_steering_rate" value="0.35" />
+        <param name="max_steering_angle" value="0.52" />
+        
+        <!-- 底盘控制参数 -->
+        <param name="wheelbase" value="1.47" />
+        <param name="track" value="0.83" />
+        <param name="wheel_radius" value="0.175" />
+        <param name="default_state" value="0" />
+    </node>
+</launch>

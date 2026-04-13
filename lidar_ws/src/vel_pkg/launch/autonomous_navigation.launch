@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- 自主导航启动文件 - 使用自定义消息类型qq_msgs和RemoteControl话题 -->
+    
+    <!-- 1. 启动激光雷达驱动 -->
+    <!-- <include file="$(find livox_ros_driver2)/launch/msg_MID360.launch"/> -->
+    
+    <!-- 2. 启动FAST-LIO定位 -->
+    <!-- <include file="$(find fast_lio_localization)/launch/sentry_localize.launch"/> -->
+    
+    <!-- 3. 启动move_base导航栈 -->
+    <!-- <include file="$(find sentry_nav)/launch/sentry_movebase.launch"/> -->
+    
+    <!-- 4. 启动速度控制转换节点（替代原来的串口节点） -->
+    <!-- 将cmd_vel转换为Carry消息并发布到/RemoteControl话题 -->
+    <node pkg="vel_pkg" type="twist_to_carry.py" name="twist_to_carry" output="screen">
+ 
+    </node>
+    
+    <!-- 5. 可选：启动初始位姿发布节点（用户可以用rviz发布或运行脚本） -->
+    <!-- <node pkg="fast_lio_localization" type="publish_initial_pose.py" name="publish_initial_pose" 
+          args="0 0 0 0 0 0" output="screen"/> -->
+    
+    <!-- 注意：原来的sentry_serial.launch不再需要，因为现在直接通过RemoteControl话题控制底盘 -->
+    
+</launch>

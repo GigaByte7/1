@@ -1,0 +1,4 @@
+string mode   # 请求参数，模式名称，可以是"differential"或"omni"
+---
+bool success   # 响应，是否成功
+string message # 响应，消息

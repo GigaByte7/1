@@ -1,0 +1,14 @@
+<launch>
+    <arg name="octomap_file" default="$(find FAST_LIO_LOCALIZATION)/maps/octomap.bt" />
+    <arg name="frame_id" default="map" />
+    <arg name="sensor_frame_id" default="livox_frame" />
+    <arg name="resolution" default="0.1" />
+
+    <node pkg="octomap_server" type="octomap_server_node" name="octomap_server" output="screen">
+        <param name="octomap_file" value="$(arg octomap_file)" />
+        <param name="frame_id" value="$(arg frame_id)" />
+        <param name="sensor_frame_id" value="$(arg sensor_frame_id)" />
+        <param name="resolution" value="$(arg resolution)" />
+        <param name="publish_free_space" value="true" />
+    </node>
+</launch>

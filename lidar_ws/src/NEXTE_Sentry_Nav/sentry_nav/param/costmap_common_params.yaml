@@ -1,0 +1,50 @@
+# #机器人几何参，如果机器人是圆形，设置 robot_radius,如果是其他形状设置 footprint
+# # robot_radius: 0.40 #圆形
+# # 根据机器人实际尺寸：1.5米长，1米宽，高度1.2米
+# # 足迹设置为矩形，以机器人中心为原点，前后左右半长
+# footprint: [[-0.75, -0.5], [-0.75, 0.5], [0.75, 0.5], [0.75, -0.5]] #其他形状
+ 
+# obstacle_range: 5.0 # 保持障碍物探测范围
+# raytrace_range: 6.0 # 保持清除障碍物范围
+ 
+# #膨胀半径，扩展在碰撞区域以外的代价区域，使得机器人规划路径避开障碍物
+# inflation_radius: 0.2  # 适当增大膨胀半径，使机器人更早避开障碍物，减少频繁重规划
+# #代价比例系数，越大则代价值越小
+# cost_scaling_factor: 8.0  # 增加代价比例系数，进一步降低障碍物对规划的影响，减少因微小障碍物导致的规划
+ 
+# #地图类型
+# map_type: costmap
+# #导航包所需要的传感器
+# observation_sources: scan
+# #对传感器的坐标系和数据进行配置。这个也会用于代价地图添加和清除障碍物。例如，你可以用激光雷达传感器用于在代价地图添加障碍物，再添加kinect用于导航和清除障碍物。
+# #sensor_frame should be your own frame in tftree
+# # 动态障碍物参数配置：增加观测保留时间，减少动态障碍物导致的频繁更新
+# observation_keep_time: 3.0  #观测保留时间（秒），控制动态障碍物在地图中的保留时间，增加以减少频繁更新
+# expected_update_rate: 5.0 #期望的传感器更新频率（Hz），降低更新频率
+# marking_keep_time: 2.0 #标记保留时间（秒），增加
+# clearing_keep_time: 2.0 #清除保留时间（秒），增加
+# scan: {sensor_frame: body_2d, data_type: LaserScan, topic: /scan, marking: true, clearing: true, observation_keep_time: 2.0, expected_update_rate: 5.0, marking_keep_time: 2.0, clearing_keep_time: 2.0}
+
+
+
+#机器人几何参，如果机器人是圆形，设置 robot_radius,如果是其他形状设置 footprint
+# robot_radius: 0.40 #圆形
+# footprint: [[-0.12, -0.12], [-0.12, 0.12], [0.12, 0.12], [0.12, -0.12]] #其他形状
+footprint: [[-0.75, -0.5], [-0.75, 0.5], [0.75, 0.5], [0.75, -0.5]] #其他形状
+ 
+obstacle_range: 1.0 # 大幅减小障碍物探测范围，几乎取消避障功能（原4.0）
+raytrace_range: 1.5 # 大幅减小清除障碍物范围（原4.5）
+ 
+ 
+#膨胀半径，扩展在碰撞区域以外的代价区域，使得机器人规划路径避开障碍物
+inflation_radius: 0.1  # 大幅减小膨胀半径，几乎取消避障膨胀（原0.4）
+#代价比例系数，越大则代价值越小
+cost_scaling_factor: 10.0  # 大幅增加代价比例系数，使障碍物代价几乎为零，取消避障影响（原5.0）
+ 
+#地图类型
+map_type: costmap
+#导航包所需要的传感器
+observation_sources: scan
+#对传感器的坐标系和数据进行配置。这个也会用于代价地图添加和清除障碍物。例如，你可以用激光雷达传感器用于在代价地图添加障碍物，再添加kinect用于导航和清除障碍物。
+#sensor_frame should be your own frame in tftree
+scan: {sensor_frame: body_2d, data_type: LaserScan, topic: /scan, marking: true, clearing: true, min_obstacle_height: -0.1, max_obstacle_height: 0.1, observation_keep_time: 1.0, expected_update_rate: 10.0}

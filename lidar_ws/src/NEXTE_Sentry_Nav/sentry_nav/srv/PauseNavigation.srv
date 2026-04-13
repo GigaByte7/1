@@ -1,0 +1,6 @@
+# 暂停导航服务请求
+bool pause  # true: 暂停, false: 继续
+---
+# 响应
+bool success
+string message

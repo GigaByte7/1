@@ -1,0 +1,56 @@
+# 简单直线控制器参数配置
+# 机器人参数
+robot_length: 1.5      # 机器人长度(m)
+robot_width: 1.0       # 机器人宽度(m)
+
+# 控制模式选择: holonomic, ackermann, differential, lateral
+control_mode: "holonomic"
+
+# 控制频率 (Hz)
+control_frequency: 30.0  # 控制频率，从20.0增加到30.0，提高控制响应速度
+
+# 速度限制 - 增强倒车控制和路径跟随精度
+max_vel_x: 0.8         # 最大前进速度(m/s)，匹配launch文件
+max_vel_y: 0.5         # 最大横移速度(m/s)，匹配launch文件
+max_vel_theta: 0.4     # 最大旋转速度(rad/s)，匹配launch文件
+
+# PID控制参数 - 增强控制增益以提高精度和倒车响应
+kp_lateral: 4.0        # 横向偏差比例系数，从2.0增加到4.0
+kd_lateral: 0.5        # 横向偏差微分系数，匹配launch文件
+kp_heading: 2.0        # 航向偏差比例系数，匹配launch文件
+kd_heading: 0.4        # 航向偏差微分系数，匹配launch文件
+
+# 新增积分控制参数以消除稳态误差
+ki_lateral: 0.3        # 横向偏差积分系数，匹配launch文件
+ki_heading: 0.15       # 航向偏差积分系数，匹配launch文件
+integral_limit: 0.1    # 积分限幅，匹配launch文件
+
+# 偏差阈值 - 调整为±2 cm控制要求
+max_lateral_error: 0.02     # 最大横向偏差(m)，从0.05改为0.02（±2 cm）
+max_heading_error: 0.05     # 最大航向偏差(rad)，从0.1降低到0.05，提高航向控制精度
+
+# 前视距离系数
+lookahead_factor: 0.6       # 前视距离系数，从0.8降低到0.5，使控制更灵敏
+
+# 话题名称配置
+cmd_vel_topic: "/cmd_vel"  # 速度控制话题
+odom_topic: "/Odometry"    # 里程计话题（可选，当前使用TF）
+
+# TF帧名称
+world_frame: "map"         # 世界坐标系（地图）
+robot_frame: "body_foot"   # 机器人坐标系
+
+# 目标容差
+goal_tolerance: 0.06       # 到达目标点的容差(m)，从0.1改为0.02，与横向偏差要求一致
+
+# 减速区域参数
+slowdown_distance: 0.8     # 开始减速的距离(m)，从1.0降低到0.8，提前减速以保持精度
+min_speed_factor: 0.05     # 最小速度因子(0-1)，从0.1降低到0.05，确保更精确的停止
+
+
+
+# 起点和终点（可以在launch文件中覆盖）
+start_x: -2.0
+start_y: -3.0
+end_x: -13.0
+end_y: -3.0

@@ -1,0 +1,30 @@
+<launch>
+    <!-- CropBox filter to remove robot arm points from raw LiDAR data -->
+    <!-- This filter removes points within the bounding box (robot arm area) in LiDAR frame -->
+    <!-- Adjusted to smaller range to avoid excessive filtering that may cause rviz crash -->
+    <node pkg="nodelet" type="nodelet" name="cropbox_filter_raw" args="standalone pcl/CropBox">
+        <remap from="~input" to="/livox/lidar" />
+        <remap from="~output" to="/livox/lidar_filtered" />
+        <rosparam>
+            min_x: -0.5   # 缩小过滤范围，避免过度过滤导致空点云
+            max_x: 0.5    
+            min_y: -0.5   
+            max_y: 0.5   
+            min_z: -0.2   
+            max_z: 1.0    
+            negative: true  # true: 保留框外点（移除框内点，即机械臂）
+        </rosparam>
+    </node>
+
+    <!-- Remap filtered point cloud to the topic expected by FAST-LIO -->
+    <!-- This ensures FAST-LIO receives the filtered point cloud without robot arm -->
+    <node pkg="topic_tools" type="relay" name="relay_filtered_to_livox" 
+          args="/livox/lidar_filtered /livox/lidar" />
+
+    <!-- Optional: Visualization topics for debugging -->
+    <node pkg="topic_tools" type="relay" name="relay_original_livox" 
+          args="/livox/lidar /livox/lidar_original" />
+    
+    <!-- Note: Removed second cropbox filter for registered point cloud during mapping -->
+    <!-- This can be enabled later for localization if needed -->
+</launch>

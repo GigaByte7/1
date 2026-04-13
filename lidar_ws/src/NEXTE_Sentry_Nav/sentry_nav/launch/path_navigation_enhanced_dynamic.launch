@@ -1,0 +1,148 @@
+<launch>
+    <!-- 
+    动态路径截断导航启动文件（增强版）
+    启动动态目标点直线控制器（增强版）和路径导航器（增强版），实现动态路径截断导航
+    支持在RViz中手动设置新目标点，截断原始路径，机器人只从路径组起点运动到新终点
+    -->
+    
+    <!-- 通用参数 -->
+    <arg name="config_file" default="$(find sentry_nav)/param/line_control_params.yaml" />
+    
+    <!-- 直线控制器参数 -->
+    <arg name="control_mode" default="holonomic" />
+    <arg name="max_vel_x" default="0.8" />
+    <arg name="max_vel_y" default="0.5" />
+    <arg name="max_vel_theta" default="0.4" />
+    
+    <!-- 路径点导航参数 -->
+    <!-- 
+      tj5四拢导航点
+       -->
+    <arg name="json_file_path" default="$(find sentry_nav)/resources/floors/tj5/waypoints.json" />
+    
+    <!-- TF坐标系参数 -->
+    <arg name="world_frame" default="map" />
+    <arg name="robot_frame" default="body_foot" />
+    
+    <!-- 目标容差参数 -->
+    <arg name="goal_tolerance" default="0.06" />
+    <arg name="dead_zone_radius" default="0.06" />
+    
+    <!-- 平移运动检测参数 -->
+    <arg name="enable_translation_detection" default="true" />
+    <arg name="translation_threshold" default="0.01" />
+    <arg name="min_translation_distance" default="0.1" />
+    <arg name="translation_kp" default="0.8" />
+    <arg name="translation_min_speed" default="0.05" />
+    <arg name="translation_max_speed" default="0.2" />
+    
+    <!-- 车轮旋转参数 - 减少时间以加快响应 -->
+    <arg name="wheel_rotation_time" default="1.0" />
+    <arg name="wheel_reset_time" default="1.0" />
+    
+    <!-- 倒车功能参数 -->
+    <arg name="backward_speed_ratio" default="0.8" />
+    <arg name="enable_backward" default="true" />
+    
+    <!-- 动态截断功能参数 -->
+    <arg name="enable_dynamic_truncation" default="true" />
+    
+    <!-- 加载参数文件 -->
+    <rosparam command="load" file="$(arg config_file)" />
+    
+    <!-- ========== 启动twist_to_carry节点（用于车轮旋转） ========== -->
+    <node pkg="vel_pkg" type="twist_to_carry.py" name="twist_to_carry" output="screen">
+        <!-- 初始模式设为四轮差速/阿克曼模式 -->
+        <param name="kinematic_mode" value="four_wheel_diff" />
+        <param name="default_state" value="0" />
+    </node>
+    
+    <!-- ========== 启动动态目标点直线控制器（带车轮旋转） ========== -->
+    <node pkg="sentry_nav" type="dynamic_goal_line_controller_enhanced.py" 
+          name="dynamic_goal_line_controller_enhanced" output="screen"
+          launch-prefix="bash -c 'sleep 5.0; $0 $@'">
+        <!-- 覆盖控制模式 -->
+        <param name="control_mode" value="$(arg control_mode)" />
+        
+        <!-- 覆盖速度限制 -->
+        <param name="max_vel_x" value="$(arg max_vel_x)" />
+        <param name="max_vel_y" value="$(arg max_vel_y)" />
+        <param name="max_vel_theta" value="$(arg max_vel_theta)" />
+        
+        <!-- 增强路径跟踪：减少超调，增强阻尼，提高路径跟踪精度 -->
+        <param name="kp_lateral" value="3.0" />
+        <param name="kd_lateral" value="0.6" />
+        <param name="kp_heading" value="1.0" />
+        <param name="kd_heading" value="0.35" />
+        
+        <!-- 优化积分控制：减小积分增益，避免积分饱和 -->
+        <param name="ki_lateral" value="0.1" />
+        <param name="ki_heading" value="0.05" />
+        <param name="integral_limit" value="0.08" />
+        
+        <!-- 导航精度参数 - 严格保证2cm偏差要求 -->
+        <param name="navigation_precision" value="0.02" />
+        <param name="max_lateral_error" value="0.02" />
+        <param name="max_heading_error" value="0.03" />
+        
+        <!-- 控制频率 -->
+        <param name="control_frequency" value="20.0" />
+        
+        <!-- 重要：TF坐标系参数 -->
+        <param name="world_frame" value="$(arg world_frame)" />
+        <param name="robot_frame" value="$(arg robot_frame)" />
+        
+        <!-- 目标容差（与dead_zone_radius保持一致） -->
+        <param name="goal_tolerance" value="$(arg goal_tolerance)" />
+        
+        <!-- 平移运动检测参数 -->
+        <param name="enable_translation_detection" value="$(arg enable_translation_detection)" />
+        <param name="translation_threshold" value="$(arg translation_threshold)" />
+        <param name="min_translation_distance" value="$(arg min_translation_distance)" />
+        <param name="translation_kp" value="$(arg translation_kp)" />
+        <param name="translation_min_speed" value="$(arg translation_min_speed)" />
+        <param name="translation_max_speed" value="$(arg translation_max_speed)" />
+        
+        <!-- 注意：控制器代码中已移除超时检查，此参数不再使用 -->
+        <param name="goal_timeout" value="30.0" />
+        
+        <!-- 车轮旋转参数 -->
+        <param name="wheel_rotation_time" value="$(arg wheel_rotation_time)" />
+        <param name="wheel_reset_time" value="$(arg wheel_reset_time)" />
+        
+        <!-- 倒车功能参数 -->
+        <param name="backward_speed_ratio" value="$(arg backward_speed_ratio)" />
+        
+        <!-- 话题重映射 -->
+        <remap from="/cmd_vel" to="/cmd_vel" />
+        <remap from="/simple_line_goal" to="/simple_line_goal" />
+    </node>
+    
+    <!-- 等待控制器初始化 -->
+    <node pkg="rostopic" type="rostopic" name="wait_for_controller" 
+          args="echo -n 1 /controller_ready" 
+          output="screen" />
+    
+    <!-- ========== 启动路径导航器（增强版，支持动态截断） ========== -->
+    <node pkg="sentry_nav" type="path_navigator_node_enhanced.py" name="path_navigator_enhanced" output="screen"
+          launch-prefix="bash -c 'sleep 2.0; $0 $@'">
+        <!-- 指定JSON文件路径 -->
+        <param name="json_file_path" value="$(arg json_file_path)" />
+        
+        <!-- 设置TF坐标系参数（与控制器一致） -->
+        <param name="world_frame" value="$(arg world_frame)" />
+        <param name="robot_frame" value="$(arg robot_frame)" />
+        
+        <!-- 设置死区半径（与控制器目标容差一致） -->
+        <param name="dead_zone_radius" value="$(arg dead_zone_radius)" />
+    </node>
+    
+    <!-- ========== 信息提示 ========== -->
+    <node pkg="rostopic" type="rostopic" name="info_publisher" output="screen"
+          args="pub /controller_ready std_msgs/String '动态路径截断导航系统（增强版）已就绪。使用说明：1. 发送Action目标到/track_points话题指定路径组 2. 在RViz中使用2D Nav Goal设置新目标点 3. 机器人将从路径起点导航到最近的路径点（截断点）' --once" />
+    
+    <!-- ========== 使用说明 ========== -->
+    <node pkg="rostopic" type="rostopic" name="usage_publisher" output="screen"
+          args="pub /navigation_info std_msgs/String '动态路径截断导航系统已启动。支持在导航过程中动态截断路径。操作步骤：1. rosrun actionlib_tools axclient.py /track_points 发送路径组名 2. 在RViz中点击2D Nav Goal设置新目标点 3. 机器人将沿截断路径导航' --once" />
+
+</launch>

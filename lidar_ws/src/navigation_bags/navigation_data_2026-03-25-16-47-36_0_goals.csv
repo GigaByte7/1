@@ -1,0 +1,13 @@
+timestamp,current_waypoint_info,topic,goal_type,path_group_name,dead_zone_radius,success,message
+1774428472.494727,Navigating to waypoint 1 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428472.689666,,/track_points/goal,action_goal,path_c,0.20000000298023224,,
+1774428486.4997766,Navigating to waypoint 2 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428536.5042133,Navigating to waypoint 3 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428542.8082163,Navigating to waypoint 4 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428598.9145422,Navigating to waypoint 5 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428643.919478,Navigating to waypoint 6 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428647.1234262,Navigating to waypoint 7 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428696.927482,Navigating to waypoint 8 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428754.2316167,Navigating to waypoint 9 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428758.4369888,Navigating to waypoint 10 of 10 in group 'path_c'.,/track_points/feedback,action_feedback,,,,
+1774428818.441815,,/track_points/result,action_result,,,True,Navigation completed successfully.

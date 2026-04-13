@@ -1,0 +1,102 @@
+<launch>
+    <!-- 
+    路径导航启动文件（增强版）
+    启动动态目标点直线控制器和路径导航器，实现路径组导航
+    -->
+    
+    <!-- 通用参数 -->
+    <arg name="config_file" default="$(find sentry_nav)/param/line_control_params.yaml" />
+    
+    <!-- 直线控制器参数 -->
+    <arg name="control_mode" default="holonomic" />
+    <arg name="max_vel_x" default="0.8" />
+    <arg name="max_vel_y" default="0.5" />
+    <arg name="max_vel_theta" default="0.4" />
+    
+    <!-- 路径点导航参数 -->
+    <arg name="json_file_path" default="$(find sentry_nav)/resources/floors/tj1/waypoints.json" />
+    
+    <!-- TF坐标系参数 -->
+    <arg name="world_frame" default="map" />
+    <arg name="robot_frame" default="body_foot" />
+    
+    <!-- 目标容差参数 -->
+    <arg name="goal_tolerance" default="0.06" />
+    <arg name="dead_zone_radius" default="0.06" />
+    
+    <!-- 加载参数文件 -->
+    <rosparam command="load" file="$(arg config_file)" />
+    
+    <!-- ========== 启动动态目标点直线控制器 ========== -->
+    <node pkg="sentry_nav" type="dynamic_goal_line_controller.py" 
+          name="dynamic_goal_line_controller" output="screen">
+        <!-- 覆盖控制模式 -->
+        <param name="control_mode" value="$(arg control_mode)" />
+        
+        <!-- 覆盖速度限制 -->
+        <param name="max_vel_x" value="$(arg max_vel_x)" />
+        <param name="max_vel_y" value="$(arg max_vel_y)" />
+        <param name="max_vel_theta" value="$(arg max_vel_theta)" />
+        
+        <!-- 调整控制参数以适应twist_to_carry1.5 0.3 1.0 0.2 -->
+        <param name="kp_lateral" value="3.5" />
+        <param name="kd_lateral" value="0.3" />
+        <param name="kp_heading" value="1.2" />
+        <param name="kd_heading" value="0.2" />
+        
+        <!-- 增加积分控制以消除稳态误差 -->
+        <param name="ki_lateral" value="0.2" />
+        <param name="ki_heading" value="0.1" />
+        <param name="integral_limit" value="0.08" />
+        
+        <!-- 导航精度参数 -->
+        <param name="navigation_precision" value="0.02" />
+        <param name="max_lateral_error" value="0.025" />
+        <param name="max_heading_error" value="0.06" />
+        
+        <!-- 控制频率 -->
+        <param name="control_frequency" value="20.0" />
+        
+        <!-- 重要：TF坐标系参数 -->
+        <param name="world_frame" value="$(arg world_frame)" />
+        <param name="robot_frame" value="$(arg robot_frame)" />
+        
+        <!-- 目标容差（与dead_zone_radius保持一致） -->
+        <param name="goal_tolerance" value="$(arg goal_tolerance)" />
+        
+        <!-- 注意：控制器代码中已移除超时检查，此参数不再使用 -->
+        <param name="goal_timeout" value="30.0" />
+        
+        <!-- 话题重映射 -->
+        <remap from="/cmd_vel" to="/cmd_vel" />
+        <remap from="/simple_line_goal" to="/simple_line_goal" />
+    </node>
+    
+    <!-- 等待控制器初始化 -->
+    <node pkg="rostopic" type="rostopic" name="wait_for_controller" 
+          args="echo -n 1 /controller_ready" 
+          output="screen" />
+    
+    <!-- ========== 启动路径导航器（Action服务器） ========== -->
+    <node pkg="sentry_nav" type="path_navigator_node.py" name="path_navigator" output="screen"
+          launch-prefix="bash -c 'sleep 2.0; $0 $@'">
+        <!-- 指定JSON文件路径 -->
+        <param name="json_file_path" value="$(arg json_file_path)" />
+        
+        <!-- 设置TF坐标系参数（与控制器一致） -->
+        <param name="world_frame" value="$(arg world_frame)" />
+        <param name="robot_frame" value="$(arg robot_frame)" />
+        
+        <!-- 设置死区半径（与控制器目标容差一致） -->
+        <param name="dead_zone_radius" value="$(arg dead_zone_radius)" />
+    </node>
+    
+    <!-- ========== 信息提示 ========== -->
+    <node pkg="rostopic" type="rostopic" name="info_publisher" output="screen"
+          args="pub /controller_ready std_msgs/String '路径导航系统已就绪，动态目标点直线控制器和路径导航器已启动。使用Action客户端发送导航目标到/track_points话题。' --once" />
+    
+    <!-- ========== 使用说明 ========== -->
+    <node pkg="rostopic" type="rostopic" name="usage_publisher" output="screen"
+          args="pub /navigation_info std_msgs/String '路径导航系统已启动。需要发送Action目标到/track_points话题来开始导航。可以使用以下命令：rosrun actionlib_tools axclient.py /track_points' --once" />
+
+</launch>

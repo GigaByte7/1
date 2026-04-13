@@ -1,0 +1,14 @@
+  rostopic pub /track_points/goal sentry_nav/PathNavigationActionGoal "header:
+  seq: 0
+  stamp:
+    secs: 0
+    nsecs: 0
+  frame_id: ''
+goal_id:
+  stamp:
+    secs: 0
+    nsecs: 0
+  id: ''
+goal:
+  path_group_name: 'path_a'
+  dead_zone_radius: 0.2"

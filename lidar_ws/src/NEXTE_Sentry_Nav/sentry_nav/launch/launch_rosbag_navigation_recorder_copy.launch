@@ -1,0 +1,111 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- 
+    ROS bag录制导航数据启动文件
+    录制规划路径和实际路径数据用于后续分析
+    优化配置避免缓冲区溢出
+    支持path_navigation.launch逐点导航
+    -->
+
+    <!-- 参数配置 -->
+    <arg name="bag_prefix" default="navigation_data" />
+    <!-- 输出目录：默认为/tmp/navigation_bags，用户可以修改为其他路径 -->
+    <arg name="output_dir" default="/home/ubuntu/lidar_ws/src/navigation_bags" />
+    <arg name="record_all_topics" default="false" />
+    <!-- 是否录制传感器数据（激光雷达等高频数据），默认false以避免缓冲区溢出 -->
+    <arg name="record_sensor_topics" default="false" />
+    <!-- 缓冲区大小（MB），默认2048MB，增加以减少丢消息 -->
+    <arg name="buffer_size" default="2048" />
+    <!-- 分块大小（MB），默认1024MB，每1GB分割一个文件 -->
+    <arg name="split_size" default="1024" />
+    <!-- 使用压缩（lz4），减少磁盘写入量 -->
+    <arg name="use_compression" default="true" />
+    
+
+    
+    <!-- 关键话题列表 -->
+    <!-- 规划路径相关话题 -->
+    <arg name="planning_topics" value="
+     
+        /move_base1/DWAPlannerROS/global_plan
+        /move_base1/DWAPlannerROS/local_plan
+        /move_base1/NavfnROS/plan
+        /move_base1/current_goal
+        /move_base1/status
+        
+       
+        /track_points/goal
+        /track_points/feedback
+        /track_points/result
+        /move_base_simple/goal
+        /initialpose
+        
+      
+        /simple_line_goal
+        /simple_line_path
+        /actual_path_marker
+        /visualization_marker
+        /planned_path_marker
+    " />
+    
+    <!-- 实际路径相关话题 -->
+    <arg name="actual_path_topics" value="
+      
+        /localization
+        /Odometry
+        /tf
+        /tf_static
+        
+       
+        /cmd_vel
+        /smooth_cmd_vel
+        
+      
+        /controller_ready
+        /navigation_info
+    " />
+    
+    <!-- 传感器数据（可选） -->
+    <!-- <arg name="sensor_topics" value="
+        /livox/lidar
+        /livox/imu
+        /scan
+        /map
+        /map_metadata
+    " /> -->
+    
+    <!-- 组合所有要录制的话题 -->
+    <arg name="all_topics_to_record" unless="$(arg record_sensor_topics)" value="
+        $(arg planning_topics)
+        $(arg actual_path_topics)
+    " />
+    
+    <arg name="all_topics_to_record" if="$(arg record_sensor_topics)" value="
+        $(arg planning_topics)
+        $(arg actual_path_topics)
+        $(arg sensor_topics)
+    " />
+    
+    <!-- 创建输出目录 -->
+    <node pkg="roslaunch" type="rosparam" name="make_output_dir" 
+          args="set /output_dir $(arg output_dir)" output="screen" />
+    
+    <!-- 录制rosbag（优化配置，避免缓冲区溢出） -->
+    <group unless="$(arg record_all_topics)">
+        <node pkg="rosbag" type="record" name="rosbag_recorder_selected" 
+              args="record --buffsize=$(arg buffer_size) --split --size=$(arg split_size) --lz4 -o $(arg output_dir)/$(arg bag_prefix) $(arg all_topics_to_record)"
+              output="screen" depends="make_output_dir">
+        </node>
+    </group>
+    
+    <!-- 录制所有话题（如果启用） -->
+    <group if="$(arg record_all_topics)">
+        <node pkg="rosbag" type="record" name="rosbag_recorder_all" 
+              args="record --buffsize=$(arg buffer_size) --split --size=$(arg split_size) --lz4 -o $(arg output_dir)/$(arg bag_prefix)_all -a"
+              output="screen" depends="make_output_dir">
+        </node>
+    </group>
+    
+
+    
+</launch>

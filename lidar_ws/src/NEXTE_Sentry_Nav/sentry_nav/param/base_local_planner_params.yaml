@@ -1,0 +1,242 @@
+# # TrajectoryPlannerROS:
+ 
+# # # Robot Configuration Parameters
+# #   max_vel_x: 0.5 # X 方向最大速度
+# #   min_vel_x: 0.1 # X 方向最小速速
+# #   max_vel_y: 0.5 # X 方向最小速速
+# #   min_vel_y: 0.1 # X 方向最小速速
+ 
+# #   max_vel_theta:  1.0 # 
+# #   min_vel_theta: -1.0
+# #   min_in_place_vel_theta: 1.0
+ 
+# #   acc_lim_x: 1.0 # X 加速限制
+# #   acc_lim_y: 1.0 # Y 加速限制
+# #   acc_lim_theta: 0.6 # 角速度加速限制
+ 
+# # # Goal Tolerance Parameters，目标公差
+#   # xy_goal_tolerance: 0.2 #default:0.1
+#   # yaw_goal_tolerance: 0.1 #default:0.05
+ 
+# # # Differential-drive robot configuration
+# # # 是否是全向移动机器人
+# #   holonomic_robot: true
+ 
+# # # Forward Simulation Parameters，前进模拟参数
+# #   sim_time: 2
+# #   vx_samples: 18
+# #   vx_samples: 10
+# #   vtheta_samples: 20
+# #   sim_granularity: 0.05
+
+
+#   # =================== segement ===============
+# base_local_planner: "dwa_local_planner/DWAPlannerROS"
+
+# controller_frequency: 20      # 提高控制频率，减少因规划延迟导致的停止，提高响应性，改善连续性
+# # controller_patience:  15.0      # 15.0
+
+# DWAPlannerROS:
+#   odom_topic: Odometry
+#   holonomic_robot: true
+
+#   # Tolerances                  Defaults
+#   # 对于1.5米长、1米宽的机器人，目标点容差应适当增加以避免在目标点附近震荡
+#   xy_goal_tolerance: 0.2  # 适中目标容差，避免过早认为到达子目标，减少频繁重规划
+#   yaw_goal_tolerance: 0.15  # 适中方向容差，平衡精度和稳定性
+#   latch_xy_goal_tolerance: false # 设置为false，使机器人持续微调直到完全到达目标
+
+#   # Forward simulation          Defaults - 优化以提高稳定性而不改变加速度
+#   use_dwa: true                 # true
+#   sim_time: 3.5                 # 增加模拟时间，提高规划前瞻性，选择更稳定的轨迹
+#   sim_granularity: 0.06       # 适当增加模拟粒度，减少计算量，提高稳定性
+#   angular_sim_granularity: 0.07 # 适当增加角速度模拟粒度，减少微小转向调整
+#   vx_samples: 30               # 增加速度采样，提高轨迹质量
+#   vy_samples: 30               # 增加速度采样
+#   vth_samples: 35               # 增加角速度采样，找到更优转向轨迹
+
+#   # Scoring                     Defaults - 优化以提高稳定性而不改变加速度
+#   # meter_scoring: false          # Is this even taken into account?
+#   path_distance_bias: 35.0     # 提高路径距离偏差，使机器人更紧密跟随全局路径，减少频繁偏离
+#   goal_distance_bias: 12.0     # 降低目标距离偏差，减少激进的目标导向行为
+#   occdist_scale: 0.03          # 降低障碍物代价比例，减少因微小障碍物导致的频繁避让
+#   forward_point_distance: 0.5  # 进一步增加前视点距离，提高规划前瞻性，使速度变化更平缓
+#   stop_time_buffer: 0.3        # 适中的停止时间缓冲，平衡减速平滑性和响应性
+#   scaling_speed: 0.25         # 适度提高缩放速度，允许更大的速度变化，避免速度被过度限制
+#   max_scaling_factor: 0.3     # 适度提高最大缩放因子，允许更大的速度变化范围
+#   # max_scaling_factor: 0.20      # 0.20
+#   # heading_lookahead: 0.325
+#   # heading_scoring_timestep: 0.8
+#   # heading_scoring: true         # Is this even taken into account?
+#   # penalize_negative_x: false    # Is this even taken into account?
+
+#   # Acceleration and velocity limits - 降低加速度和速度限制以提高运动平稳性
+
+#   acc_limit_trans: 10.0           # 降低平移加速度限制，使加速更平缓，避免急停急起
+#   acc_lim_x: 10.0             # 降低X方向加速度限制
+#   acc_lim_y: 10.0              # 降低Y方向加速度限制
+#   acc_lim_theta: 1.5            # 降低角加速度限制，使转向更平缓
+
+#   max_trans_vel: 1.5              # 适当降低最大平移速度，提高运动平稳性
+#   min_trans_vel: 0.03            # 进一步降低最小平移速度，允许更低速度连续运动，避免停止
+#   max_vel_x: +1.5                 # 适当降低X方向最大速度
+#   min_vel_x: -1.5                 # 适当降低X方向最小速度（反向）
+#   max_vel_y: +1.5                 # 适当降低Y方向最大速度
+#   min_vel_y: -1.5                 # 适当降低Y方向最小速度
+#   max_rot_vel: 0.4                # 降低最大旋转速度，提高转向平稳性
+#   min_rot_vel: 0.1               # 提高最小旋转速度阈值，过滤微小转向调整，减少频繁转动
+
+#   # Other                       Defaults - 优化以提高稳定性而不改变加速度
+#   oscillation_reset_dist: 1.0  # 适中的震荡重置距离，避免正常移动被误判为震荡
+#   oscillation_reset_angle: 1.5  # 适中的震荡重置角度阈值，避免正常转向被误判为震荡
+#   prune_plan: true             # 启用路径修剪，移除不必要的路径点
+#   trans_stopped_vel: 0.01        # 进一步降低停止速度阈值，避免误判为停止，保持运动连续性
+#   rot_stopped_vel: 0.03          # 进一步降低旋转停止速度阈值，避免误判为停止
+#   # publish_cost_grid_pc: true    # false
+
+
+#   publish_traj_pc: true
+#   publish_cost_grid_pc: true
+#   # global_frame_id: camera_init_2d
+#   global_frame_id: map             # robot_foot_init
+
+
+
+
+
+
+
+#   # =================== segement ===============
+# base_local_planner: "dwa_local_planner/DWAPlannerROS"
+
+# controller_frequency: 20      # 提高控制器频率，提高控制精度（原20.0）
+# # controller_patience:  15.0      # 15.0
+
+# DWAPlannerROS:
+#   odom_topic: Odometry
+#   holonomic_robot: true
+
+#   # Tolerances                  Defaults - 优化容差参数以减少原地摆动
+#   xy_goal_tolerance: 0.5        # 增大位置容差，减少在目标点附近的微调，允许机器人更早认为到达目标
+#   yaw_goal_tolerance: 0.5       # 增大方向容差，减少方向调整的频率，避免原地旋转
+#   latch_xy_goal_tolerance: true # 设置为true，进入容差范围即锁定目标，避免反复微调
+
+#   # Forward simulation          Defaults - 优化前向模拟参数以支持高速运动
+#   use_dwa: true                 # true
+#   sim_time: 3.0                 # 适当减少模拟时间，提高高速规划响应性
+#   sim_granularity: 0.04         # 减小模拟粒度，提高高速轨迹精度
+#   angular_sim_granularity: 0.04 # 减小角速度模拟粒度，提高高速转向精度
+#   vx_samples: 40                # 增加速度采样数，为高速运动提供更多轨迹选择
+#   vy_samples: 40                # 增加速度采样数
+#   vth_samples: 40               # 增加角速度采样数，支持高速转向
+
+
+
+#   # Scoring                     Defaults - 优化评分参数以支持高速运动
+#   path_distance_bias: 8.0       # 大幅降低路径跟随权重，允许机器人选择更直接的路径以保持高速
+#   goal_distance_bias: 40.0      # 大幅提高目标导向权重，鼓励机器人高速向目标前进
+#   occdist_scale: 0.002         # 进一步降低障碍物代价比例，减少高速运动中的避让行为
+#   forward_point_distance: 1.5   # 大幅增加前视点距离，提高高速规划的前瞻性
+#   stop_time_buffer: 0.2        # 减少停止时间缓冲，提高高速响应性
+#   scaling_speed: 0.4           # 大幅提高缩放速度，允许更大的速度变化范围
+#   max_scaling_factor: 0.6      # 大幅提高最大缩放因子，支持更广的速度范围
+
+#   # Acceleration and velocity limits - 大幅提高速度限制以实现高速运动
+
+#   acc_limit_trans: 20            # 大幅提高平移加速度限制，使机器人能快速加速到高速
+#   acc_lim_x: 20.0                # 大幅提高X方向加速度限制
+#   acc_lim_y: 20.0                # 大幅提高Y方向加速度限制
+#   acc_lim_theta: 4.0             # 大幅提高角加速度限制，使高速转向更有力
+
+#   max_trans_vel: 3.0 # 大幅提高最大平移速度，实现高速运动
+#   min_trans_vel: 0.10 # 适当降低最小平移速度，提高灵活性
+#   max_vel_x: +3.0 # 大幅提高X方向最大速度
+#   min_vel_x: 0.10 # 适当降低最小正向速度阈值
+#   max_vel_y: +3.0 # 大幅提高Y方向最大速度
+#   min_vel_y: -0.10 # 提高反向速度，增强后退能力
+#   max_rot_vel: 1.5 # 大幅提高最大旋转速度，实现高速转向
+#   min_rot_vel: 0.10 # 降低最小旋转速度阈值，提高转向灵活性
+
+#   # Other                       Defaults - 优化其他参数以鼓励运动
+#   oscillation_reset_dist: 2.0   # 进一步增加震荡重置距离阈值，避免因重量大移动缓慢被误判为震荡
+#   oscillation_reset_angle: 4.0  # 进一步增加震荡重置角度阈值
+#   prune_plan: true             # 启用路径修剪，移除不必要的路径点
+#   trans_stopped_vel: 0.25      # 大幅提高停止速度阈值，避免因重量大移动缓慢被误判为停止
+#   rot_stopped_vel: 0.4         # 大幅提高旋转停止速度阈值
+#   # publish_cost_grid_pc: true    # false
+
+
+#   publish_traj_pc: true
+#   publish_cost_grid_pc: true
+#   # global_frame_id: camera_init_2d
+#   global_frame_id: robot_foot_init
+
+
+
+
+
+
+ # =================== segement ===============
+base_local_planner: "dwa_local_planner/DWAPlannerROS"
+
+controller_frequency: 20      # 提高控制器频率，提高控制精度（原20.0）
+# controller_patience:  15.0      # 15.0
+
+DWAPlannerROS:
+  odom_topic: Odometry
+  holonomic_robot: true
+
+  # Tolerances                  Defaults - 优化容差参数以强制路径点精确到达
+  xy_goal_tolerance: 0.2       # 进一步减小位置容差，使机器人必须更精确到达每个路径点
+  yaw_goal_tolerance: 0.2       # 进一步减小方向容差，提高方向精度
+  latch_xy_goal_tolerance: true # 设置为false，使机器人持续微调直到完全到达每个路径点
+
+  # Forward simulation          Defaults - 优化前向模拟参数以增强路径跟随
+  use_dwa: true                 # true
+  sim_time: 5.0                 # 增加模拟时间，提高规划前瞻性，选择更符合全局路径的轨迹
+  sim_granularity: 0.05         # 保持模拟粒度
+  angular_sim_granularity: 0.04 # 保持角速度模拟粒度
+  vx_samples: 60                # 保持速度采样数40支持精细控制
+  vy_samples: 70                # 保持速度采样数40充分利用全向能力
+  vth_samples: 40               # 增加角速度采样数，提供更多转向选项以跟随弯曲路径20
+
+
+
+  # Scoring                     Defaults - 优化评分参数以强制路径跟随
+  path_distance_bias: 70.0    # 进一步提高路径跟随权重，强制机器人严格跟随规划路径45
+  goal_distance_bias: 8.0      # 进一步降低目标导向权重，完全避免直线冲向最终目标
+  occdist_scale: 0.00         # 保持障碍物代价比例
+  forward_point_distance: 0.9  # 增加前视点距离，使机器人关注更远的路径点，提高路径跟随的连续性
+  stop_time_buffer: 0.4        # 保持停止时间缓冲
+  scaling_speed: 0.           # 保持缩放速度
+  max_scaling_factor: 0.3      # 保持最大缩放因子
+
+  # Acceleration and velocity limits - 保持现有加速度限制，不改变
+
+  acc_limit_trans: 10
+  acc_lim_x: 10.0                # 保持加速度限制
+  acc_lim_y: 10.0                # 保持加速度限制
+  acc_lim_theta: 2.0            # 保持角加速度限制
+
+  max_trans_vel: 1.0 # 降低最大平移速度，使机器人更精确地跟随路径
+  min_trans_vel: 0.05 # 保持最小平移速度
+  max_vel_x: +1.0 # 降低X方向最大速度
+  min_vel_x: 0.05 # 保持最小正向速度
+  max_vel_y: +1.0 # 降低Y方向最大速度
+  min_vel_y: -0.03 # 保持反向速度
+  max_rot_vel: 0.6 # 提高最大旋转速度，使机器人能够快速调整方向以跟随弯曲路径0.4
+  min_rot_vel: 0.05 # 保持最小旋转速度阈值0.2
+
+  # Other                       Defaults - 优化其他参数以提高平稳性
+  oscillation_reset_dist: 1.5   # 进一步提高震荡重置距离阈值，彻底避免误判震荡1
+  oscillation_reset_angle: 2.0  # 进一步提高震荡重置角度阈值，彻底避免误判震荡
+  prune_plan: true             # 启用路径修剪，移除不必要的路径点，减少不必要的速度调整
+  trans_stopped_vel: 0.03       # 略微降低停止速度阈值，避免误判停止，但保持运动连续性
+  rot_stopped_vel: 0.1         # 略微降低旋转停止速度阈值，避免误判停止，但保持转向连续性
+  # publish_cost_grid_pc: true    # false
+
+
+  publish_traj_pc: true
+  publish_cost_grid_pc: true
+  # global_frame_id: camera_init_2d
+  global_frame_id: map

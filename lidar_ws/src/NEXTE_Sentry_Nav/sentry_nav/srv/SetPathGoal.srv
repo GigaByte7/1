@@ -1,0 +1,7 @@
+# 请求：动态目标点
+# 当在导航过程中设置新目标点时，用于截断原始路径
+geometry_msgs/PoseStamped dynamic_goal
+---
+# 响应：操作是否成功
+bool success
+string message

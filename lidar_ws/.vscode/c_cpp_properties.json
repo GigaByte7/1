@@ -1,0 +1,31 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/ubuntu/lidar_ws/devel/include/**",
+        "/home/ubuntu/platform_ws/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/ubuntu/platform_ws/src/can_to_ros/include/**",
+        "/home/ubuntu/lidar_ws/src/NEXTE_Sentry_Nav/sentry_slam/FAST_LIO/include/**",
+        "/home/ubuntu/lidar_ws/src/NEXTE_Sentry_Nav/sentry_slam/FAST_LIO_LOCALIZATION/include/**",
+        "/home/ubuntu/platform_ws/src/fdilink_ahrs/include/**",
+        "/home/ubuntu/lidar_ws/src/ldl_msg/include/**",
+        "/home/ubuntu/platform_ws/src/platform_control/include/**",
+        "/home/ubuntu/lidar_ws/src/NEXTE_Sentry_Nav/sentry_slam/Point-LIO/include/**",
+        "/home/ubuntu/lidar_ws/src/vel_pkg/include/**",
+        "/home/ubuntu/lidar_ws/src/NEXTE_Sentry_Nav/sentry_tools/velocity_smoother_ema/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++17"
+    }
+  ],
+  "version": 4
+}

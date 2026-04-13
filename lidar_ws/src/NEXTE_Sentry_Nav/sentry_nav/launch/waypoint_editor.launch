@@ -1,0 +1,35 @@
+<launch>
+    <!-- 
+    导航点编辑器启动文件
+    启动交互式导航点编辑器，允许在RViz中通过鼠标拖动调整导航点坐标
+    -->
+
+    <!-- 通用参数 -->
+    <arg name="json_file_path" default="$(find sentry_nav)/resources/floors/tj5/waypoints.json" />
+    <arg name="path_group_name" default="path_a" />
+    <arg name="world_frame" default="map" />
+    <arg name="marker_size" default="0.3" />
+    
+    <!-- RViz参数 -->
+    <arg name="rviz" default="false" />
+    <arg name="rviz_config" default="$(find sentry_nav)/rviz/waypoint_editor.rviz" />
+    
+    <!-- ========== 启动导航点编辑器节点 ========== -->
+    <node pkg="sentry_nav" type="waypoint_editor.py" name="waypoint_editor" output="screen">
+        <param name="json_file_path" value="$(arg json_file_path)" />
+        <param name="path_group_name" value="$(arg path_group_name)" />
+        <param name="world_frame" value="$(arg world_frame)" />
+        <param name="marker_size" value="$(arg marker_size)" />
+    </node>
+    
+    <!-- ========== 启动RViz（可选）- 只在有GUI环境时启用 ========== -->
+    <group if="$(arg rviz)">
+        <node pkg="rviz" type="rviz" name="rviz_waypoint_editor" 
+              args="-d $(arg rviz_config)" output="screen" />
+    </group>
+    
+    <!-- ========== 控制台输出信息 ========== -->
+    <node pkg="rostopic" type="rostopic" name="console_info" output="screen"
+          args="echo '导航点编辑器已启动。'" />
+
+</launch>

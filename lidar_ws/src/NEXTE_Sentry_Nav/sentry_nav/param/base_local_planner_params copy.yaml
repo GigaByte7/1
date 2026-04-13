@@ -1,0 +1,174 @@
+# # TrajectoryPlannerROS:
+ 
+# # # Robot Configuration Parameters
+# #   max_vel_x: 0.5 # X 方向最大速度
+# #   min_vel_x: 0.1 # X 方向最小速速
+# #   max_vel_y: 0.5 # X 方向最小速速
+# #   min_vel_y: 0.1 # X 方向最小速速
+ 
+# #   max_vel_theta:  1.0 # 
+# #   min_vel_theta: -1.0
+# #   min_in_place_vel_theta: 1.0
+ 
+# #   acc_lim_x: 1.0 # X 加速限制
+# #   acc_lim_y: 1.0 # Y 加速限制
+# #   acc_lim_theta: 0.6 # 角速度加速限制
+ 
+# # # Goal Tolerance Parameters，目标公差
+#   # xy_goal_tolerance: 0.2 #default:0.1
+#   # yaw_goal_tolerance: 0.1 #default:0.05
+ 
+# # # Differential-drive robot configuration
+# # # 是否是全向移动机器人
+# #   holonomic_robot: true
+ 
+# # # Forward Simulation Parameters，前进模拟参数
+# #   sim_time: 2
+# #   vx_samples: 18
+# #   vx_samples: 10
+# #   vtheta_samples: 20
+# #   sim_granularity: 0.05
+
+
+#   # =================== segement ===============
+# base_local_planner: "dwa_local_planner/DWAPlannerROS"
+
+# controller_frequency: 20      # 提高控制频率，减少因规划延迟导致的停止，提高响应性
+# # controller_patience:  15.0      # 15.0
+
+# DWAPlannerROS:
+#   odom_topic: Odometry
+#   holonomic_robot: true
+
+#   # Tolerances                  Defaults
+#   # 对于1.5米长、1米宽的机器人，目标点容差应适当增加以避免在目标点附近震荡
+#   xy_goal_tolerance: 0.5 # 减小目标容差，使机器人更精确地到达目标点
+#   yaw_goal_tolerance: 0.2 # 减小方向容差，提高朝向精度
+#   latch_xy_goal_tolerance: true # 设置为false，使机器人持续微调直到完全到达目标
+
+#   # Forward simulation          Defaults - 优化以提高稳定性而不改变加速度
+#   use_dwa: true                 # true
+#   sim_time: 4.5                 # 进一步增加模拟时间，提高规划前瞻性，选择更稳定的轨迹
+#   sim_granularity: 0.04       # 进一步减小模拟粒度，提高轨迹模拟精度
+#   angular_sim_granularity: 0.05 # 进一步减小角速度模拟粒度，提高转向控制精度
+#   vx_samples: 30               # 大幅增加速度采样，提高轨迹选择多样性，找到更稳定的轨迹
+#   vy_samples: 30               # 大幅增加速度采样
+#   vth_samples: 35               # 大幅增加角速度采样，提高转向选择多样性
+
+#   # Scoring                     Defaults - 优化以提高稳定性而不改变加速度
+#   # meter_scoring: false          # Is this even taken into account?
+#   path_distance_bias: 20.0     # 进一步提高路径距离偏差，使机器人更倾向于平滑跟随路径
+#   goal_distance_bias: 25.0      # 进一步降低目标距离偏差，减少激进的目标导向加速
+#   occdist_scale: 0.015          # 适度提高障碍物代价比例，保持安全距离
+#   forward_point_distance: 1.2  # 大幅增加前视点距离，提高规划前瞻性，使速度变化更平缓
+#   stop_time_buffer: 0.5        # 进一步增加停止时间缓冲，提供更多减速时间
+#   scaling_speed: 0.2          # 进一步降低缩放速度，减少速度突变
+#   max_scaling_factor: 0.4      # 进一步降低最大缩放因子，限制速度变化范围
+#   # max_scaling_factor: 0.20      # 0.20
+#   # heading_lookahead: 0.325
+#   # heading_scoring_timestep: 0.8
+#   # heading_scoring: true         # Is this even taken into account?
+#   # penalize_negative_x: false    # Is this even taken into account?
+
+#   # Acceleration and velocity limits - 降低加速度和速度限制以提高运动平稳性
+
+#   acc_limit_trans: 8             # 降低平移加速度限制，使加速更平缓，提高运动平稳性
+#   acc_lim_x: 8              # 降低X方向加速度限制
+#   acc_lim_y: 8               # 降低Y方向加速度限制
+#   acc_lim_theta: 2.0            # 降低角加速度限制，使转向更平缓
+
+#   max_trans_vel: 1.5              # 适当降低最大平移速度，提高运动平稳性
+#   min_trans_vel: -1.5              # 稍微降低最小平移速度，但仍然避免低速抖动
+#   max_vel_x: +1.5                 # 适当降低X方向最大速度
+#   min_vel_x: -1.5                 # 适当降低X方向最小速度（反向）
+#   max_vel_y: +1.5                 # 适当降低Y方向最大速度
+#   min_vel_y: -1.5                 # 适当降低Y方向最小速度
+#   max_rot_vel: 0.4                # 降低最大旋转速度，提高转向平稳性
+#   min_rot_vel: 0.08               # 降低最小旋转速度阈值，允许更平滑的转向
+
+#   # Other                       Defaults - 优化以提高稳定性而不改变加速度
+#   oscillation_reset_dist: 0.5  # 进一步增大震荡重置距离，避免在导航过程中正常移动被误判为震荡
+#   oscillation_reset_angle: 1.5  # 进一步增大震荡重置角度阈值，避免正常转向被误判为震荡
+#   prune_plan: true             # 启用路径修剪，移除不必要的路径点
+#   trans_stopped_vel: 0.08        # 降低停止速度阈值，使机器人更容易检测到停止，提高控制精度
+#   rot_stopped_vel: 0.1           # 降低旋转停止速度阈值，提高旋转控制精度
+#   # publish_cost_grid_pc: true    # false
+
+
+#   publish_traj_pc: true
+#   publish_cost_grid_pc: true
+#   # global_frame_id: camera_init_2d
+#   global_frame_id: map             # robot_foot_init
+
+
+
+
+
+
+
+
+
+ # =================== segement ===============
+base_local_planner: "dwa_local_planner/DWAPlannerROS"
+
+controller_frequency: 20      # 提高控制器频率，提高控制精度（原20.0）
+# controller_patience:  15.0      # 15.0
+
+DWAPlannerROS:
+  odom_topic: Odometry
+  holonomic_robot: true
+
+  # Tolerances                  Defaults - 优化容差参数以减少原地摆动
+  xy_goal_tolerance: 0.5        # 增大位置容差，减少在目标点附近的微调，允许机器人更早认为到达目标
+  yaw_goal_tolerance: 0.5       # 增大方向容差，减少方向调整的频率，避免原地旋转
+  latch_xy_goal_tolerance: true # 设置为true，进入容差范围即锁定目标，避免反复微调
+
+  # Forward simulation          Defaults - 优化前向模拟参数以提高平稳性
+  use_dwa: true                 # true
+  sim_time: 4.0                 # 增加模拟时间，提高规划前瞻性，选择更稳定的轨迹
+  sim_granularity: 0.05         # 适当减小模拟粒度，提高轨迹精度
+  angular_sim_granularity: 0.05 # 适当减小角速度模拟粒度，提高转向精度
+  vx_samples: 30                # 保持适当的速度采样数，平衡计算复杂度和轨迹质量
+  vy_samples: 30                # 保持适当的速度采样数
+  vth_samples: 30               # 保持适当的角速度采样数
+
+
+
+  # Scoring                     Defaults - 优化评分参数以鼓励向前运动
+  path_distance_bias: 15.0     # 降低路径跟随权重，减少对路径精确跟随的要求，允许更直接向目标运动
+  goal_distance_bias: 30.0     # 提高目标导向权重，鼓励机器人向目标前进，减少原地转向
+  occdist_scale: 0.02          # 保持障碍物代价比例
+  forward_point_distance: 0.8  # 保持前视点距离
+  stop_time_buffer: 0.4        # 保持停止时间缓冲
+  scaling_speed: 0.2           # 保持缩放速度
+  max_scaling_factor: 0.3      # 保持最大缩放因子
+
+  # Acceleration and velocity limits - 保持现有加速度限制，不改变
+
+  acc_limit_trans: 10
+  acc_lim_x: 10.0                # 保持加速度限制
+  acc_lim_y: 10.0                # 保持加速度限制
+  acc_lim_theta: 2.0            # 保持角加速度限制
+
+  max_trans_vel: 1.0 # 保持最大平移速度
+  min_trans_vel: 0.05 # 提高最小平移速度，确保机器人能启动运动，避免因速度过小被死区过滤
+  max_vel_x: +1.0 # 保持X方向最大速度
+  min_vel_x: 0.05 # 提高最小正向速度，确保向前运动
+  max_vel_y: +1.0 # 保持Y方向最大速度
+  min_vel_y: -0.03 # 保持反向速度
+  max_rot_vel: 0.6 # 保持最大旋转速度
+  min_rot_vel: 0.15 # 提高最小旋转速度阈值，减少微小转向调整，避免原地摆动
+
+  # Other                       Defaults - 优化其他参数以提高平稳性
+  oscillation_reset_dist: 1.0   # 进一步提高震荡重置距离阈值，彻底避免误判震荡
+  oscillation_reset_angle: 2.0  # 进一步提高震荡重置角度阈值，彻底避免误判震荡
+  prune_plan: true             # 启用路径修剪，移除不必要的路径点，减少不必要的速度调整
+  trans_stopped_vel: 0.03       # 略微降低停止速度阈值，避免误判停止，但保持运动连续性
+  rot_stopped_vel: 0.1         # 略微降低旋转停止速度阈值，避免误判停止，但保持转向连续性
+  # publish_cost_grid_pc: true    # false
+
+
+  publish_traj_pc: true
+  publish_cost_grid_pc: true
+  # global_frame_id: camera_init_2d
+  global_frame_id: robot_foot_init
