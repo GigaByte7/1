@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# 与6-11相同
+
 import rospy
 import actionlib
 import json
@@ -12,7 +14,7 @@ import threading
 from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Path
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import ColorRGBA, Bool, Float32
 from sentry_nav.msg import PathNavigationAction, PathNavigationGoal, PathNavigationResult, PathNavigationFeedback
 from sentry_nav.srv import SetPathGoal, SetPathGoalResponse, PauseNavigation, PauseNavigationResponse
 
@@ -77,6 +79,9 @@ class PathNavigatorEnhanced:
         # 订阅RViz的2D Nav Goal话题
         self.rviz_goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.rviz_goal_callback)
         
+        # 发布是否是最终路径点标志（用于控制中间点不停车）
+        self.final_waypoint_pub = rospy.Publisher('/is_final_waypoint', Bool, queue_size=1)
+        
         # 动态目标点服务
         self.dynamic_goal_service = rospy.Service('/set_path_goal', SetPathGoal, self.handle_set_path_goal)
         
@@ -90,6 +95,11 @@ class PathNavigatorEnhanced:
         self.is_paused = False
         self.pause_lock = threading.Lock()
         
+        # 速度缩放因子相关（用于感知机器人是否被外部命令停止）
+        self.current_speed_factor = 1.0
+        self.speed_factor_sub = rospy.Subscriber('/speed_factor', Float32, self.speed_factor_callback)
+        rospy.loginfo("已订阅速度缩放因子话题: /speed_factor，当speed_factor=0时暂停超时计时")
+        
         # 创建Action服务器
         self._action_server = actionlib.SimpleActionServer(
             '/track_points', 
@@ -99,8 +109,9 @@ class PathNavigatorEnhanced:
         )
         self._action_server.start()
         
-        # 创建暂停导航服务
-        self.pause_service = rospy.Service('/pause_navigation', PauseNavigation, self.handle_pause_navigation)
+        # 创建暂停导航服务（使用不同的服务名称，避免与直线控制器冲突）
+        self.pause_service = rospy.Service('/path_navigator/pause_navigation', PauseNavigation, self.handle_pause_navigation)
+        rospy.loginfo("路径导航器暂停服务已创建: /path_navigator/pause_navigation")
 
         rospy.loginfo("Path Navigation Action Server (Enhanced) is ready. 等待Action目标...")
         rospy.loginfo("支持动态目标点截断功能：")
@@ -229,12 +240,22 @@ class PathNavigatorEnhanced:
         self.publish_truncated_path(self.truncated_waypoints, goal.path_group_name)
         
         # 6. 循环遍历截断后的路径点
+        total_points = len(self.truncated_waypoints)
         for i, waypoint_data in enumerate(self.truncated_waypoints):
             # 检查Action是否被客户端取消
             if self._action_server.is_preempt_requested():
                 rospy.loginfo("导航被客户端取消.")
                 self._action_server.set_preempted()
                 return
+
+            # 判断是否为最终路径点（最后一个点）
+            is_final = (i == total_points - 1)
+            
+            # 先发布是否是最终路径点的标志，再发布目标点
+            # 这样直线控制器在收到目标点时已知道是否为最终点
+            self.final_waypoint_pub.publish(Bool(is_final))
+            rospy.loginfo("路径点 %d/%d %s", i + 1, total_points,
+                          "是最终点" if is_final else "是中间点（到达后不停车继续导航）")
 
             # 创建并发布目标点
             goal_pose = PoseStamped()
@@ -250,7 +271,7 @@ class PathNavigatorEnhanced:
             goal_pose.pose.orientation.w = waypoint_data['orientation']['w']
             
             rospy.loginfo("发布路径点 %d/%d: (%.3f, %.3f, %.3f)", 
-                         i + 1, len(self.truncated_waypoints),
+                         i + 1, total_points,
                          goal_pose.pose.position.x,
                          goal_pose.pose.position.y,
                          goal_pose.pose.position.z)
@@ -259,7 +280,7 @@ class PathNavigatorEnhanced:
             
             # 发布反馈
             feedback = PathNavigationFeedback()
-            feedback.current_waypoint_info = "导航到路径点 %d/%d (截断路径组 '%s')" % (i + 1, len(self.truncated_waypoints), goal.path_group_name)
+            feedback.current_waypoint_info = "导航到路径点 %d/%d (截断路径组 '%s')" % (i + 1, total_points, goal.path_group_name)
             self._action_server.publish_feedback(feedback)
             rospy.loginfo(feedback.current_waypoint_info)
 
@@ -287,8 +308,19 @@ class PathNavigatorEnhanced:
         self.dynamic_goal_event.clear()
         self.truncated_waypoints = None
 
+    def speed_factor_callback(self, msg):
+        """速度缩放因子回调函数"""
+        self.current_speed_factor = max(0.0, min(2.0, msg.data))
+        if self.current_speed_factor == 0.0:
+            rospy.loginfo_throttle(3.0, "速度缩放因子为0，超时计时已暂停，等待恢复速度因子...")
+        elif self.current_speed_factor > 0.0 and self.current_speed_factor < 0.01:
+            rospy.loginfo_throttle(3.0, "速度缩放因子接近0 (%.4f)，仍视为停止状态", self.current_speed_factor)
+
     def wait_for_arrival(self, target_pose, radius, timeout_seconds=60.0):
-        """等待机器人到达目标点指定的半径内（支持暂停功能）"""
+        """等待机器人到达目标点指定的半径内（支持暂停功能）
+        
+        当 speed_factor=0 时暂停超时计时，确保机器人不运动时不会自动跳转到下一个目标点。
+        """
         rate = rospy.Rate(10)  # 10 Hz
         start_time = rospy.get_time()
         arrived = False
@@ -297,52 +329,90 @@ class PathNavigatorEnhanced:
         initial_distance = None
         last_log_time = start_time
         
-        # 暂停相关变量
+        # 暂停相关变量（服务/接口触发的暂停）
         pause_start_time = None
         total_pause_duration = 0.0
+        timeout_extended = False
+        
+        # speed_factor=0 导致的暂停（超时冻结）
+        speed_factor_pause_start = None
+        total_speed_factor_pause_duration = 0.0
+        
+        # 记录过去一段时间内距离是否有变化，用于检测机器人是否卡住
+        distance_check_interval = 15.0  # 每15秒检查一次
+        last_distance_check_time = start_time
+        last_check_distance = None
         
         while not rospy.is_shutdown() and not arrived:
             current_time = rospy.get_time()
             
-            # 检查暂停状态
+            # 检查服务触发的暂停状态
             with self.pause_lock:
                 is_paused = self.is_paused
             
-            # 处理暂停状态
+            # 检查 speed_factor 是否为0（外部停止）
+            is_speed_factor_stopped = (self.current_speed_factor < 0.01)
+            
+            # ===== 处理服务触发的暂停 =====
             if is_paused:
                 if pause_start_time is None:
                     pause_start_time = current_time
-                    rospy.loginfo("导航已暂停，等待继续...")
-                
-                # 发布零速度命令（通过goal_pub发布停止目标）
-                stop_pose = PoseStamped()
-                stop_pose.header.stamp = rospy.Time.now()
-                stop_pose.header.frame_id = self.world_frame
-                stop_pose.pose = target_pose.pose
-                # 发布当前位置作为目标点（机器人会停止）
-                self.goal_pub.publish(stop_pose)
-                
-                # 检查是否继续
+                    rospy.loginfo("导航已暂停（接口触发），等待继续...")
+                    elapsed_without_pause = current_time - start_time - total_pause_duration - total_speed_factor_pause_duration
+                    remaining_time_before_pause = max(0, timeout_seconds - elapsed_without_pause)
+                    rospy.loginfo("暂停前剩余时间: %.1f 秒", remaining_time_before_pause)
                 rate.sleep()
                 continue
             else:
-                # 如果刚从暂停状态恢复
                 if pause_start_time is not None:
-                    pause_end_time = current_time
-                    pause_duration = pause_end_time - pause_start_time
+                    pause_duration = current_time - pause_start_time
                     total_pause_duration += pause_duration
-                    rospy.loginfo("导航继续，暂停时间: %.1f 秒", pause_duration)
+                    rospy.loginfo("导航继续（接口触发），暂停时间: %.1f 秒", pause_duration)
+                    timeout_seconds += pause_duration
+                    rospy.loginfo("延长超时时间到 %.1f 秒，确保暂停不影响超时", timeout_seconds)
                     pause_start_time = None
-                    # 重新发布目标点
-                    self.goal_pub.publish(target_pose)
             
-            # 调整超时时间（排除暂停时间）
-            adjusted_current_time = current_time - total_pause_duration
-            adjusted_start_time = start_time
+            # ===== 处理 speed_factor=0 导致的暂停（超时冻结）=====
+            if is_speed_factor_stopped:
+                if speed_factor_pause_start is None:
+                    speed_factor_pause_start = current_time
+                    rospy.logwarn("速度缩放因子为0，超时计时已冻结！机器人将一直等待直到速度因子恢复 > 0")
+                rate.sleep()
+                continue
+            else:
+                if speed_factor_pause_start is not None:
+                    speed_factor_pause_duration = current_time - speed_factor_pause_start
+                    total_speed_factor_pause_duration += speed_factor_pause_duration
+                    rospy.loginfo("速度缩放因子恢复为 %.2f，冻结时间: %.1f 秒，超时计时继续",
+                                 self.current_speed_factor, speed_factor_pause_duration)
+                    speed_factor_pause_start = None
             
-            # 检查超时（排除暂停时间）
-            if adjusted_current_time - adjusted_start_time > timeout_seconds:
-                rospy.logwarn("到达目标点超时 (%.1f 秒，排除暂停时间).", timeout_seconds)
+            # ===== 超时检查（已排除所有暂停/冻结时间）=====
+            elapsed_active_time = current_time - start_time - total_pause_duration - total_speed_factor_pause_duration
+            
+            if elapsed_active_time > timeout_seconds:
+                # 超时前做一次最终检查：如果机器人在15秒内距离有变化，则延长超时
+                if last_check_distance is not None:
+                    # 获取最新距离再做一次检查
+                    try:
+                        (trans_now, _) = self.tf_listener.lookupTransform(
+                            self.world_frame, self.robot_frame, rospy.Time(0))
+                        dx_now = trans_now[0] - target_pose.pose.position.x
+                        dy_now = trans_now[1] - target_pose.pose.position.y
+                        current_distance = math.sqrt(dx_now*dx_now + dy_now*dy_now)
+                        distance_change = abs(current_distance - last_check_distance)
+                        
+                        if distance_change > 0.02:  # 2cm以上的变化说明机器人在移动
+                            rospy.logwarn("超时已到但机器人仍在移动（最近距离变化 %.3f m），延长超时60秒",
+                                         distance_change)
+                            timeout_seconds += 60.0
+                            last_distance_check_time = current_time
+                            last_check_distance = current_distance
+                            continue
+                    except:
+                        pass
+                
+                rospy.logwarn("到达目标点超时 (%.1f 秒活动时间).", timeout_seconds)
                 break
             
             # 检查Action是否被客户端取消
@@ -364,12 +434,23 @@ class PathNavigatorEnhanced:
                 if initial_distance is None:
                     initial_distance = distance
                     rospy.loginfo("初始距离到目标点: %.3f 米", initial_distance)
+                    last_check_distance = distance
+                
+                # 定期检查机器人是否仍在移动（用于超时延长）
+                if current_time - last_distance_check_time > distance_check_interval:
+                    if last_check_distance is not None:
+                        distance_change = abs(distance - last_check_distance)
+                        rospy.loginfo("距离变化检查: 上次=%.3f m, 当前=%.3f m, 变化=%.3f m, 速度因子=%.2f",
+                                     last_check_distance, distance, distance_change, self.current_speed_factor)
+                    last_distance_check_time = current_time
+                    last_check_distance = distance
                 
                 # 每5秒记录一次进度
                 if current_time - last_log_time > 5.0:
-                    remaining_time = timeout_seconds - (adjusted_current_time - adjusted_start_time)
-                    rospy.loginfo("导航中... 距离: %.3f 米, 容差: %.3f 米, 剩余时间: %.1f 秒, 暂停状态: %s", 
-                                 distance, radius, remaining_time, "是" if is_paused else "否")
+                    remaining_time = max(0, timeout_seconds - elapsed_active_time)
+                    rospy.loginfo("导航中... 距离: %.3f 米, 容差: %.3f 米, 剩余时间: %.1f 秒, 速度因子: %.2f, 暂停: %s, 速度冻结: %s", 
+                                 distance, radius, remaining_time, self.current_speed_factor,
+                                 "是" if is_paused else "否", "是" if is_speed_factor_stopped else "否")
                     last_log_time = current_time
                 
                 # 检查是否到达
@@ -380,7 +461,6 @@ class PathNavigatorEnhanced:
             
             except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException) as e:
                 rospy.logwarn_throttle(5.0, "TF异常: %s. 重试中...", e)
-                # 等待一下再重试
                 rospy.sleep(0.1)
                 continue
             

@@ -11,6 +11,11 @@
 订阅RViz中的2D Nav Goal目标点，从当前位置直线运动到目标点
 
 备份文件在/home/ubuntu/lidar_ws/src/NEXTE_Sentry_Nav/sentry_nav/scripts/dynamic_goal_line_controller_enhanced_copy.py
+修复6-11存在的问题:倒车导航能力较弱,不能顺利到达终点
+修复6-12存在的问题:导航后半部分偏差比前半部分大
+修复6-12-2存在的问题:在接近终点时车轮左右反复摇摆
+修复6-12-3存在的问题:未彻底解决在接近终点时车轮左右反复摇摆
+
 """
 
 import rospy
@@ -20,6 +25,7 @@ import actionlib
 import threading
 from geometry_msgs.msg import Twist, PoseStamped
 from visualization_msgs.msg import Marker
+from std_msgs.msg import Bool
 from tf.transformations import euler_from_quaternion
 from vel_pkg.srv import SetKinematicMode, SetKinematicModeRequest
 from sentry_nav.srv import PauseNavigation, PauseNavigationResponse
@@ -43,6 +49,9 @@ class DynamicGoalLineControllerWithWheelRotation:
         self.end_point = (0.0, 0.0)    # 终点（目标点）
         self.has_goal = False          # 是否有有效目标点
         self.goal_received_time = rospy.get_time()
+        
+        # 是否是最终路径点（用于控制到达后是否停车）
+        self.is_final_waypoint = True  # 默认为最终点（兼容独立RViz目标点）
         
         # 平移运动状态机
         self.translation_state = 'IDLE'  # IDLE, ROTATE_TO_90, TRANSLATING, ROTATE_TO_ZERO
@@ -68,7 +77,18 @@ class DynamicGoalLineControllerWithWheelRotation:
         # 订阅RViz中的目标点话题
         self.goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.goal_callback)
         
- 
+        # 订阅速度缩放因子话题
+        from std_msgs.msg import Float32
+        self.speed_factor_sub = rospy.Subscriber(self.speed_factor_topic, Float32, self.speed_factor_callback)
+        self.last_speed_factor_time = 0.0
+        self.current_speed_factor = self.default_speed_factor  # 当前速度缩放因子
+        self.speed_factor_lock = threading.Lock()
+        rospy.loginfo("已订阅速度缩放因子话题: %s", self.speed_factor_topic)
+        
+        # 订阅是否是最终路径点标志（来自path_navigator_node_enhanced）
+        self.final_waypoint_sub = rospy.Subscriber('/is_final_waypoint', Bool, self.final_waypoint_callback)
+        rospy.loginfo("已订阅最终路径点标志话题: /is_final_waypoint")
+
         # 可选：发布当前目标点用于可视化
         self.goal_pub = rospy.Publisher('/simple_line_goal', PoseStamped, queue_size=1)
         
@@ -81,6 +101,13 @@ class DynamicGoalLineControllerWithWheelRotation:
         self.last_recorded_point = None  # 上一个记录点
         self.min_record_distance = rospy.get_param('~min_record_distance', 0.05)
         self.max_path_points = rospy.get_param('~max_path_points', 500)
+        
+        # 偏差值日志发布器 - 发布到 /navigation_errors 话题
+        from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+        self.error_pub = rospy.Publisher('/navigation_errors', Float32MultiArray, queue_size=1)
+
+        
+
         
         # 控制变量初始化
         self.prev_lateral_error = 0.0
@@ -135,39 +162,50 @@ class DynamicGoalLineControllerWithWheelRotation:
         self.robot_width = rospy.get_param('~robot_width', 1.0)
         
         # 控制频率
-        self.control_frequency = rospy.get_param('~control_frequency', 20.0)
+        self.control_frequency = rospy.get_param('~control_frequency', 30.0)
         
         # 速度限制
         self.max_vel_x = rospy.get_param('~max_vel_x', 0.8)
         self.max_vel_y = rospy.get_param('~max_vel_y', 0.5)
         self.max_vel_theta = rospy.get_param('~max_vel_theta', 0.4)
         
-        # PID参数
-        self.kp_lateral = rospy.get_param('~kp_lateral', 3.5)
-        self.kd_lateral = rospy.get_param('~kd_lateral', 0.3)
-        self.kp_heading = rospy.get_param('~kp_heading', 1.2)
-        self.kd_heading = rospy.get_param('~kd_heading', 0.2)
+        # PID参数 - 提高误差灵敏度，实现多次小范围微调
+        self.kp_lateral = rospy.get_param('~kp_lateral', 6.0)  # 提高横向P增益从5.0到6.0，显著提高横向误差灵敏度
+        self.kd_lateral = rospy.get_param('~kd_lateral', 0.8)  # 降低横向D增益从1.5到0.8，减少横向振荡和大幅度调整
+        self.kp_heading = rospy.get_param('~kp_heading', 3.0)  # 提高航向P增益从2.2到3.0，显著提高航向灵敏度
+        self.kd_heading = rospy.get_param('~kd_heading', 0.4)  # 降低航向D增益从0.8到0.4，减少角度振荡和大幅度调整
         
-        # 积分控制参数
-        self.ki_lateral = rospy.get_param('~ki_lateral', 0.2)
-        self.ki_heading = rospy.get_param('~ki_heading', 0.1)
-        self.integral_limit = rospy.get_param('~integral_limit', 0.08)
+        # 积分控制参数 - 针对地面不平增强积分控制
+        self.ki_lateral = rospy.get_param('~ki_lateral', 0.3)  # 提高横向积分增益从0.2到0.3，增强稳态误差消除
+        self.ki_heading = rospy.get_param('~ki_heading', 0.2)  # 提高航向积分增益从0.15到0.2，增强航向稳态误差消除
+        self.integral_limit = rospy.get_param('~integral_limit', 0.15)  # 提高积分限幅从0.1到0.15，适应地面不平
+        self.integral_deadzone = 0.005  # 积分死区，小误差时不积分，避免积分饱和
         
-        # 控制精度阈值
-        self.navigation_precision = rospy.get_param('~navigation_precision', 0.02)
-        self.max_lateral_error = rospy.get_param('~max_lateral_error', 0.02)  # 2cm偏差限制
-        self.max_heading_error = rospy.get_param('~max_heading_error', 0.05)
+        # 控制精度阈值 - 提高精度要求，确保机器人与规划路线平行
+        self.navigation_precision = rospy.get_param('~navigation_precision', 0.015)  # 提高精度到1.5cm，确保严格路径跟随
+        self.max_lateral_error = rospy.get_param('~max_lateral_error', 0.02)  # 减小横向误差到2cm，提高控制精度
+        self.max_heading_error = rospy.get_param('~max_heading_error', 0.012)  # 降低航向误差到0.012rad (~0.69度)，确保机器人平行于路径
         
-        # 偏差纠正增强参数 - 当偏差接近或超过限制时使用更强的控制
-        self.critical_lateral_error = self.max_lateral_error * 1.2  # 超过1.8cm触发紧急纠正（原1.2倍）
-        self.emergency_kp_lateral = self.kp_lateral * 3.0  # 紧急情况下的增强P增益
-        self.emergency_kd_lateral = self.kd_lateral * 2.5  # 紧急情况下的增强D增益
-        # 初始阶段增强参数 - 解决机器人刚开始运动时反应缓慢的问题
-        self.initial_phase_duration = 2.0  # 初始阶段持续时间（秒）
-        self.initial_phase_kp_multiplier = 1.8  # 初始阶段P增益倍增系数
-        self.initial_phase_kd_multiplier = 1.5  # 初始阶段D增益倍增系数
-        self.initial_phase_ki_multiplier = 1.2  # 初始阶段I增益倍增系数
+        # 偏差纠正增强参数 - 针对地面不平优化增益调整策略
+        self.critical_lateral_error = self.max_lateral_error * 0.6  # 适当提高触发阈值到1.5cm（原1cm），减少地面不平的误触发
+        self.emergency_kp_lateral = self.kp_lateral * 4.5  # 降低紧急P增益从5.0到4.5，避免过激反应
+        self.emergency_kd_lateral = self.kd_lateral * 3.0  # 降低紧急D增益从3.5到3.0，避免振荡
+        # 初始阶段增强参数 - 针对地面不平优化
+        self.initial_phase_duration = 10.0  # 延长初始阶段到10秒，保证大半程都有增强增益，抑制后半程误差扩大
+        self.initial_phase_kp_multiplier = 2.5  # 降低初始阶段P增益倍增系数从3.0到2.5，更平稳
+        self.initial_phase_kd_multiplier = 2.0  # 降低初始阶段D增益倍增系数从2.5到2.0，更平稳
+        self.initial_phase_ki_multiplier = 1.8  # 降低初始阶段I增益倍增系数从2.0到1.8，更平稳
         self.initial_phase_start_time = None  # 初始阶段开始时间
+        
+        # 地面不平适应参数
+        self.error_smoothing_factor = 0.6  # 误差平滑因子（0-1），从0.3提高到0.6减少滤波延迟，增强响应速度
+        self.smoothed_lateral_error = 0.0
+        self.smoothed_heading_error = 0.0
+        self.error_history_size = 5  # 误差历史记录大小
+        self.lateral_error_history = []
+        self.heading_error_history = []
+        self.adaptive_gain_factor = 1.0  # 自适应增益因子
+        self.error_variance_threshold = 0.001  # 误差方差阈值，超过此值认为地面不平
         
         # 平移运动检测参数
         self.enable_translation_detection = rospy.get_param('~enable_translation_detection', True)
@@ -180,11 +218,14 @@ class DynamicGoalLineControllerWithWheelRotation:
         self.translation_max_speed = rospy.get_param('~translation_max_speed', 0.5)
         
         # 车轮旋转参数
-        self.wheel_rotation_time = rospy.get_param('~wheel_rotation_time', 2.0)  # 车轮旋转90度所需时间
-        self.wheel_reset_time = rospy.get_param('~wheel_reset_time', 2.0)  # 车轮复位所需时间
+        self.wheel_rotation_time = rospy.get_param('~wheel_rotation_time', 3.0)  # 车轮旋转90度所需时间
+        self.wheel_reset_time = rospy.get_param('~wheel_reset_time', 3.0)  # 车轮复位所需时间
         
         # 倒车参数
-        self.backward_speed_ratio = rospy.get_param('~backward_speed_ratio', 0.8)  # 倒车速度比例
+        self.backward_speed_ratio = rospy.get_param('~backward_speed_ratio', 0.6)  # 倒车速度比例
+        
+        # 平移速度参数
+        self.translation_speed_ratio = rospy.get_param('~translation_speed_ratio', 0.5)  # 平移速度比例
         
         # 话题名称
         self.cmd_vel_topic = rospy.get_param('~cmd_vel_topic', '/cmd_vel')
@@ -199,9 +240,15 @@ class DynamicGoalLineControllerWithWheelRotation:
         # 目标点超时检查
         self.goal_timeout = rospy.get_param('~goal_timeout', 30.0)
         
+        # 速度缩放因子控制参数
+        self.speed_factor_topic = rospy.get_param('~speed_factor_topic', '/speed_factor')
+        self.speed_factor_timeout = rospy.get_param('~speed_factor_timeout', 1.0)  # 缩放因子超时时间（秒）
+        self.default_speed_factor = rospy.get_param('~default_speed_factor', 1.0)  # 默认速度缩放因子
+        
         rospy.loginfo("控制器参数: goal_tolerance=%.3f, goal_timeout=%.1f", 
                      self.goal_tolerance, self.goal_timeout)
-        
+        rospy.loginfo("速度缩放因子话题: %s, 超时时间: %.1f秒, 默认缩放因子: %.2f", 
+                     self.speed_factor_topic, self.speed_factor_timeout, self.default_speed_factor)
     
     
     def goal_callback(self, msg):
@@ -431,6 +478,11 @@ class DynamicGoalLineControllerWithWheelRotation:
         self.translation_state = 'ROTATE_TO_ZERO'
         self.state_start_time = rospy.get_time()
         
+        # 重置误差积分项，避免平移后累积误差导致大幅度调整
+        self.lateral_error_integral = 0.0
+        self.heading_error_integral = 0.0
+        rospy.loginfo("重置误差积分项，避免平移后大幅度调整")
+        
         # 切换到四轮差速模式（车轮会自动复位到0度）
         try:
             req = SetKinematicModeRequest()
@@ -648,7 +700,13 @@ class DynamicGoalLineControllerWithWheelRotation:
                 rospy.loginfo("车轮复位完成，状态机结束")
                 self.translation_state = 'IDLE'
                 self.translation_type = None
-                self.has_goal = False
+                # 注意：不清除has_goal，因为路径导航器可能还有后续目标点
+                # 重置误差历史记录，避免平移后的残留误差影响后续控制
+                self.lateral_error_history = []
+                self.heading_error_history = []
+                self.smoothed_lateral_error = 0.0
+                self.smoothed_heading_error = 0.0
+                rospy.loginfo("重置误差历史记录，避免平移后残留误差")
                 # 确保切换到差速模式
                 if self.set_kinematic_mode_service is not None:
                     try:
@@ -688,6 +746,12 @@ class DynamicGoalLineControllerWithWheelRotation:
         """全向移动控制策略"""
         cmd_vel = Twist()
         
+        # 获取根据速度因子调整后的增益
+        adjusted_gains = self.get_speed_factor_adjusted_gains()
+        rospy.loginfo_throttle(1.0, "速度因子调整后增益: kp_lateral=%.2f, kd_lateral=%.2f, kp_heading=%.2f, kd_heading=%.2f",
+                             adjusted_gains['kp_lateral'], adjusted_gains['kd_lateral'],
+                             adjusted_gains['kp_heading'], adjusted_gains['kd_heading'])
+        
         # 安全防护：状态一致性检查
         # 1. 如果状态是TRANSLATING但translation_type为空，状态不一致
         # 2. 如果translation_type不为空但状态不是TRANSLATING，状态不一致
@@ -723,9 +787,9 @@ class DynamicGoalLineControllerWithWheelRotation:
                 remaining_distance = abs(self.vertical_line_y_error)
                 if remaining_distance < 0.5:  # 0.5米开始减速
                     slowdown_factor = max(0.1, remaining_distance / 0.5)
-                    y_speed = self.translation_kp * y_error * slowdown_factor
+                    y_speed = self.translation_kp * y_error * slowdown_factor * self.translation_speed_ratio
                 else:
-                    y_speed = self.translation_kp * y_error
+                    y_speed = self.translation_kp * y_error * self.translation_speed_ratio
                 
                 y_speed = self.clamp(y_speed, self.translation_min_speed, self.translation_max_speed) * y_error_sign
                 
@@ -774,47 +838,64 @@ class DynamicGoalLineControllerWithWheelRotation:
                 else:
                     base_speed = -self.max_vel_x * self.backward_speed_ratio * 0.6  # 小偏差时正常速度，提高效率
 
+                # 倒车接近终点减速逻辑（与前进保持一致）
+                remaining_distance = getattr(self, 'remaining_distance', float('inf'))
+                if remaining_distance < 1.0:  # 1米内显著减速
+                    slowdown_factor = max(0.25, remaining_distance / 1.0)
+                    base_speed *= slowdown_factor
+                    rospy.loginfo("倒车接近终点减速: 剩余距离=%.2f m, 减速因子=%.2f, 速度=%.3f m/s", 
+                                 remaining_distance, slowdown_factor, base_speed)
+                elif remaining_distance < 2.0:  # 2米内温和减速
+                    slowdown_factor = max(0.5, remaining_distance / 2.0)
+                    base_speed *= slowdown_factor
+
                 # 2. 倒车时增强横向控制和航向控制，确保严格按规划路径运动
-                # 增强横向控制增益以快速纠正位置偏差
-                backward_kp_lateral = self.kp_lateral * 1.8  # 增强横向P增益以提高响应速度
-                backward_kd_lateral = self.kd_lateral * 2.2  # 增强横向D增益以抑制超调
-                backward_ki_lateral = self.ki_lateral * 1.0  # 标准积分增益
+                # 使用根据速度因子调整后的增益作为基础
+                adjusted_gains = self.get_speed_factor_adjusted_gains()
+                
+                # 增强横向控制增益以快速纠正位置偏差（全面提升基础增益）
+                backward_kp_lateral = adjusted_gains['kp_lateral'] * 2.2  # 增强横向P增益以提高响应速度
+                backward_kd_lateral = adjusted_gains['kd_lateral'] * 2.5  # 增强横向D增益以抑制超调
+                backward_ki_lateral = adjusted_gains['ki_lateral'] * 1.2  # 增强积分增益消除稳态误差
 
                 if lateral_error > self.max_lateral_error:
                     rospy.logwarn("倒车模式：横向偏差 %.3f 米超过2cm限制，启动增强紧急纠正！", lateral_error)
                     # 显著增强控制增益以快速回归路径
-                    backward_kp_lateral = self.kp_lateral * 3.0  # 显著增强横向P增益
-                    backward_kd_lateral = self.kd_lateral * 2.5  # 增强横向D增益
-                    backward_ki_lateral = self.ki_lateral * 1.3  # 增强积分增益
-                    # 降低速度以专注纠正偏差
-                    base_speed = -self.max_vel_x * self.backward_speed_ratio * 0.3  # 低速度高增益纠正
-                    rospy.logwarn("紧急纠正：降低速度，显著增强控制以快速回归路径！增益：P=%.1f, D=%.1f, I=%.1f",
-                                 backward_kp_lateral, backward_kd_lateral, backward_ki_lateral)
-                elif lateral_error > self.max_lateral_error * 0.5:  # 降低触发阈值（原0.7）
-                    rospy.loginfo("倒车模式：横向偏差 %.3f 米超过1cm，增强控制", lateral_error)
+                    backward_kp_lateral = adjusted_gains['kp_lateral'] * 3.5  # 显著增强横向P增益
+                    backward_kd_lateral = adjusted_gains['kd_lateral'] * 3.0  # 增强横向D增益
+                    backward_ki_lateral = adjusted_gains['ki_lateral'] * 1.5  # 增强积分增益
+                    # 保持一定速度以维持运动惯性，同时增强角速度纠正
+                    base_speed = -self.max_vel_x * self.backward_speed_ratio * 0.4  # 适当提高速度，避免过度降速导致响应迟缓
+                    rospy.logwarn("紧急纠正：增强控制，保持速度以快速纠正！增益：P=%.1f, D=%.1f, I=%.1f, 速度=%.3f",
+                                 backward_kp_lateral, backward_kd_lateral, backward_ki_lateral, abs(base_speed))
+                elif lateral_error > self.max_lateral_error * 0.4:  # 降低触发阈值，更早介入纠正
+                    rospy.loginfo("倒车模式：横向偏差 %.3f 米超过0.8cm，增强控制", lateral_error)
                     # 增强控制增益以保持精度
-                    backward_kp_lateral = self.kp_lateral * 2.2  # 增强横向P增益
-                    backward_kd_lateral = self.kd_lateral * 1.8  # 增强横向D增益
-                    backward_ki_lateral = self.ki_lateral * 1.1  # 适度增强积分增益
+                    backward_kp_lateral = adjusted_gains['kp_lateral'] * 2.5  # 增强横向P增益
+                    backward_kd_lateral = adjusted_gains['kd_lateral'] * 2.0  # 增强横向D增益
+                    backward_ki_lateral = adjusted_gains['ki_lateral'] * 1.3  # 适度增强积分增益
                     # 中等速度
-                    base_speed = -self.max_vel_x * self.backward_speed_ratio * 0.45
+                    base_speed = -self.max_vel_x * self.backward_speed_ratio * 0.5
                 
-                # 添加死区：当横向误差很小时，不进行控制调整（进一步增大死区以减少微小震荡和过度纠正）
-                lateral_error_deadzone = 0.025  # 2.5厘米死区（原0.015米，进一步增大以减少微小调整和过度纠正）
+                # 减小死区以提高误差灵敏度：当横向误差很小时，仍然进行小范围微调
+                lateral_error_deadzone = 0.015  # 减小到1.5厘米死区（原2.5厘米），提高横向误差灵敏度
                 if lateral_error < lateral_error_deadzone:
-                    lateral_error = 0.0
-                    lateral_error_rate = 0.0
-                    self.lateral_error_integral = 0.0  # 重置积分项
+                    # 不将误差设为0，而是保持小误差，以便进行微小调整
+                    # 减小误差但不完全忽略，实现多次小范围微调
+                    lateral_error *= 0.3  # 减小误差但不忽略
+                    lateral_error_rate *= 0.3  # 减小误差率
+                    # 不清除积分项，允许小误差缓慢累积
                 
                 lateral_correction = (backward_kp_lateral * lateral_error + 
                                      backward_kd_lateral * lateral_error_rate +
                                      backward_ki_lateral * self.lateral_error_integral)
                 lateral_correction = self.clamp(lateral_correction, -self.max_vel_y * 0.5, self.max_vel_y * 0.5)  # 限制横向调整幅度
                 
-                # 3. 增强航向控制参数以提高路径跟踪能力
+                # 3. 增强航向控制参数以提高路径跟踪能力（防止振荡超调）
                 # 倒车时需要更强的航向控制来保持路径跟踪
-                backward_kp_heading = self.kp_heading * 0.8  # 增加角度P增益（原0.6），提高响应速度
-                backward_kd_heading = self.kd_heading * 1.2  # 增加角度D增益（原1.0），增强阻尼
+                # 提高P增益以加快航向纠正响应，D/P比约2.8保持稳定
+                backward_kp_heading = self.kp_heading * 1.8  # 提高P增益（原1.0→1.8），加速倒车航向纠正响应
+                backward_kd_heading = self.kd_heading * 5.0  # 提高D增益（原3.5→5.0，D/P≈2.8），抑制振荡确保稳定收敛
 
                 # 对于航向误差，需要特别处理：倒车时航向误差可能接近π，需要规范化到[-π/2, π/2]范围
                 # 当航向误差接近π时，实际上机器人是正对后方，这是理想的倒车方向
@@ -827,29 +908,35 @@ class DynamicGoalLineControllerWithWheelRotation:
                     else:
                         normalized_heading_error = -math.pi - normalized_heading_error
 
-                # 重要修复：对于四轮差速机器人，不能直接横向移动，需要将横向误差转换为额外的航向调整
+                # 关键修复：对于四轮差速机器人，不能直接横向移动，需要将横向误差转换为额外的航向调整
                 # 倒车时需要更强的航向调整来保持路径跟踪
-                # 横向误差到航向调整的转换系数（增强以提高路径跟踪能力）
-                lateral_to_heading_gain = 1.2  # 增强横向误差转换为航向调整的增益（原0.8），提高路径跟踪响应
-                # 倒车时误差符号可能需要反转：正误差需要负航向调整
-                additional_heading_from_lateral = lateral_error * lateral_to_heading_gain * -error_sign  # 添加负号反转方向
+                # 横向误差到航向调整的转换系数（提高以增强倒车路径跟踪能力）
+                lateral_to_heading_gain = 1.8  # 提高增益（原1.2→1.8），倒车需要更强纠正力以弥补差速控制的弱点
+                
+                # 【核心修复】倒车时横向误差→航向调整的符号必须与前进一致，使用 -error_sign
+                # 错误公式（已废弃）：additional_heading = lateral_error * gain * (+error_sign)
+                #   - 当机器人在路径右侧(error_sign=1)，错误地产生正角速度（左转），导致车尾偏右、更远离路径
+                #   - 这正是"偏差越纠正越大"的根本原因
+                # 正确公式：additional_heading = lateral_error * gain * (-error_sign)
+                #   - 当机器人在路径右侧(error_sign=1)，产生负角速度（右转），车尾向左偏回归路径
+                additional_heading_from_lateral = -lateral_error * lateral_to_heading_gain * error_sign  # 与前进一致，使用 -error_sign
 
-                # 确保附加的航向调整不会过大但足够有效
-                max_additional_heading = 0.2  # 增加最大附加航向调整（原0.1），增强纠正能力
+                # 适当提高最大附加航向限制，配合高增益快速纠正倒车偏差
+                max_additional_heading = 0.3  # 提高最大附加航向（原0.18→0.3 rad≈17°），快速纠正倒车偏差
                 additional_heading_from_lateral = self.clamp(additional_heading_from_lateral, -max_additional_heading, max_additional_heading)
 
                 # 合并航向误差和横向误差转换的航向调整
                 total_heading_adjustment = normalized_heading_error + additional_heading_from_lateral
 
-                # 添加航向误差死区（适度减小死区以提高路径跟踪精度）
-                heading_error_deadzone = 0.05  # 约2.9度死区（原4.6度），提高敏感性
+                # 添加航向误差死区（适当大小，避免频繁微调导致左右摆动）
+                heading_error_deadzone = 0.025  # 约1.43度死区（增大防频繁切换方向），减少小误差下的方向盘摆动
                 if abs(total_heading_adjustment) < heading_error_deadzone:
                     total_heading_adjustment = 0.0
                     heading_error_rate = 0.0
 
                 angular_correction = (backward_kp_heading * total_heading_adjustment +
                                      backward_kd_heading * heading_error_rate)
-                max_backward_angular = 0.2  # 增加最大角度调整幅度（原0.15），增强纠正能力
+                max_backward_angular = 0.35  # 提高最大角速度（原0.25→0.35 rad/s），配合高增益快速纠正倒车偏差
                 angular_correction = self.clamp(angular_correction, -max_backward_angular, max_backward_angular)
                 
                 # 4. 发布倒车命令
@@ -868,6 +955,8 @@ class DynamicGoalLineControllerWithWheelRotation:
                 return cmd_vel
             else:
                 # 目标在前方，正常前进 - 优化控制参数以增强稳定性
+                # 注意：speed_factor 由 apply_speed_factor_to_cmd_vel() 统一在 control_loop() 中应用
+                # 这里不再手动乘以 speed_factor，避免双重应用导致速度失控
                 base_speed = self.max_vel_x
                 
                 # 偏差检测与紧急纠正：当横向偏差接近或超过2cm限制时增强控制
@@ -877,22 +966,30 @@ class DynamicGoalLineControllerWithWheelRotation:
                     # 显著增强控制增益以快速纠正偏差
                     forward_kp_lateral = self.emergency_kp_lateral  # 使用紧急P增益
                     forward_kd_lateral = self.emergency_kd_lateral  # 使用紧急D增益
-                    forward_ki_lateral = self.ki_lateral * 1.5  # 增加积分增益
-                    # 降低前进速度以专注于偏差纠正
-                    base_speed = self.max_vel_x * 0.5
-                elif lateral_error > self.max_lateral_error * 0.7:
-                    rospy.loginfo("横向偏差 %.3f 米接近2cm限制，增强控制", lateral_error)
+                    forward_ki_lateral = self.ki_lateral * 2.5  # 大幅增加积分增益
+                    # 大幅降低前进速度以专注于偏差纠正
+                    base_speed = self.max_vel_x * 0.2
+                elif lateral_error > self.max_lateral_error * 0.5:  # 降低触发阈值到1cm（更敏感）
+                    rospy.loginfo("横向偏差 %.3f 米超过1cm，启动增强控制", lateral_error)
+                    # 显著增强控制增益
+                    forward_kp_lateral = self.kp_lateral * 3.5  # 大幅增强横向P增益
+                    forward_kd_lateral = self.kd_lateral * 3.0  # 大幅增强横向D增益
+                    forward_ki_lateral = self.ki_lateral * 2.0  # 大幅增强积分增益
+                    # 降低速度以专注于偏差纠正
+                    base_speed = self.max_vel_x * 0.4
+                elif lateral_error > self.max_lateral_error * 0.25:  # 进一步降低阈值到0.5cm（非常敏感）
+                    rospy.loginfo("横向偏差 %.3f 米超过0.5cm，启动轻度增强控制", lateral_error)
                     # 适度增强控制增益
-                    forward_kp_lateral = self.kp_lateral * 2.2
-                    forward_kd_lateral = self.kd_lateral * 2.0
-                    forward_ki_lateral = self.ki_lateral * 1.5
+                    forward_kp_lateral = self.kp_lateral * 2.5  # 增强横向P增益
+                    forward_kd_lateral = self.kd_lateral * 2.2  # 增强横向D增益
+                    forward_ki_lateral = self.ki_lateral * 1.5  # 适度增强积分增益
                     # 稍微降低速度
-                    base_speed = self.max_vel_x * 0.7
+                    base_speed = self.max_vel_x * 0.6
                 else:
-                    # 正常情况，使用标准优化参数
-                    forward_kp_lateral = self.kp_lateral * 0.8  # 稍减小P增益
-                    forward_kd_lateral = self.kd_lateral * 1.2  # 稍增加D增益
-                    forward_ki_lateral = self.ki_lateral * 0.7  # 减小积分增益
+                    # 正常情况，但保持较高增益以确保快速响应
+                    forward_kp_lateral = self.kp_lateral * 1.5  # 保持较高P增益
+                    forward_kd_lateral = self.kd_lateral * 1.8  # 保持较高D增益
+                    forward_ki_lateral = self.ki_lateral * 1.1  # 保持积分增益
                     
                     # 检查是否处于初始阶段（前2秒）- 如果是，应用增强增益
                     if self.initial_phase_start_time is not None:
@@ -911,26 +1008,46 @@ class DynamicGoalLineControllerWithWheelRotation:
                 
                 # 根据剩余距离调整速度，平滑减速
                 remaining_distance = getattr(self, 'remaining_distance', float('inf'))
-                if remaining_distance < 2.0:  # 2米开始减速
+                
+                # 【滑行区】当剩余距离 < 0.25m 时，进入滑行模式，适度降低角速度修正
+                # 缩小滑行区阈值从0.5m降至0.25m，延长有效矫正区间，避免过早停止方向调整
+                in_coasting_zone = (remaining_distance < 0.25)
+                # 【到达临界区】当剩余距离 < 0.08m 时（与 navigator dead_zone 0.06m 对齐），大部分停止角速度修正但保留微小修正
+                in_arrival_zone = (remaining_distance < 0.08)
+                
+                # 距离行进减速控制
+                if remaining_distance < 0.25:  # 0.25米内进一步减速
+                    slowdown_factor = max(0.15, remaining_distance / 0.25)
+                    base_speed *= slowdown_factor
+                elif remaining_distance < 2.0:  # 2米开始减速
                     slowdown_factor = max(0.3, remaining_distance / 2.0)  # 保持最小速度30%
                     base_speed *= slowdown_factor
-                elif remaining_distance < 0.5:  # 0.5米内进一步减速
-                    slowdown_factor = max(0.15, remaining_distance / 0.5)
-                    base_speed *= slowdown_factor
+
                 
-                # 添加横向误差死区，减少微小震荡（更小的死区以确保2cm精度）
-                forward_lateral_error_deadzone = 0.008  # 0.8厘米死区（原1.5厘米）
-                if lateral_error < forward_lateral_error_deadzone:
-                    lateral_error = 0.0
-                    lateral_error_rate = 0.0
-                    self.lateral_error_integral = 0.0  # 重置积分项
+                # 添加横向误差死区，适度压制微小震荡
+                forward_lateral_error_deadzone = 0.008  # 0.8厘米死区
+                if lateral_error < forward_lateral_error_deadzone or in_coasting_zone:
+                    # 滑行区适度保留横向误差（30%→从5%提高），保留有限纠正能力
+                    lateral_error *= 0.3  # 滑行区保留30%横向误差，允许适度微调
+                    lateral_error_rate *= 0.3
+                    self.lateral_error_integral *= 0.95  # 缓慢衰减积分项，保持一定纠正记忆
                 
                 # 添加航向误差死区，减少角度微小调整
-                forward_heading_error_deadzone = 0.01  # 约0.57度死区（减小以提高敏感性）
-                if abs(heading_error) < forward_heading_error_deadzone:
-                    heading_error = 0.0
-                    heading_error_rate = 0.0
-                    self.heading_error_integral = 0.0  # 重置积分项
+                forward_heading_error_deadzone = 0.015  # 提高死区到0.86度，滑行区允许更大姿态偏差
+                if abs(heading_error) < forward_heading_error_deadzone or in_coasting_zone:
+                    # 滑行区/死区内航向误差适度衰减（保留20%），避免方向盘反复摆动
+                    heading_error *= 0.2
+                    heading_error_rate *= 0.2
+                    self.heading_error_integral *= 0.95  # 缓慢衰减积分项
+                elif in_arrival_zone:
+                    # 到达临界区大幅衰减角度修正但不完全归零，保留微小纠正力
+                    heading_error *= 0.1
+                    heading_error_rate *= 0.1
+                    self.heading_error_integral *= 0.95
+                elif abs(heading_error) < forward_heading_error_deadzone * 2.0:
+                    # 死区扩展区：轻微衰减
+                    heading_error *= 0.5
+                    heading_error_rate *= 0.5
                 
                 # 重要修复：对于四轮差速机器人，不能直接横向移动，需要将横向误差转换为额外的航向调整
                 # 横向误差越大，需要的航向调整也越大，以便机器人通过曲线运动纠正位置
@@ -940,11 +1057,27 @@ class DynamicGoalLineControllerWithWheelRotation:
                 # 因此需要添加负号：additional_heading_from_lateral = -lateral_error * lateral_to_heading_gain * error_sign
                 # 但是注意：lateral_error总是正数（绝对值），error_sign表示方向
                 # 所以实际应该是：additional_heading_from_lateral = -lateral_to_heading_gain * lateral_error * error_sign
-                lateral_to_heading_gain = 1.0  # 降低横向误差转换为航向调整的增益，减少超调（原1.5）
+                
+                # 横向误差到航向调整的转换增益
+                # 【修复蛇行】滑行区（<0.5m）将增益降至接近零，到达临界区（<0.08m）完全归零
+                if in_arrival_zone:
+                    # 到达临界区保留微小增益，不彻底关闭横向→航向转换
+                    lateral_to_heading_gain = 0.15  # 保留15%增益，允许微小最终修正
+                    max_additional_heading = 0.03
+                elif in_coasting_zone:
+                    # 滑行区：渐进衰减，从0.25m到0.08m线性降低增益，底限0.5
+                    coasting_progress = 1.0 - (remaining_distance - 0.08) / (0.25 - 0.08)
+                    lateral_to_heading_gain = 0.8 - 0.3 * coasting_progress  # 0.8→0.5（不低于0.5）
+                    max_additional_heading = 0.12 - 0.07 * coasting_progress  # 0.12→0.05 rad
+                elif remaining_distance < 1.0:
+                    lateral_to_heading_gain = 0.8  # 终点附近降低增益，小误差不放大
+                    max_additional_heading = 0.15
+                else:
+                    lateral_to_heading_gain = 1.3  # 正常距离使用较强增益
+                    max_additional_heading = 0.15
                 additional_heading_from_lateral = -lateral_to_heading_gain * lateral_error * error_sign  # 添加负号反转方向
 
-                # 确保附加的航向调整不会过大
-                max_additional_heading = 0.25  # 最大附加航向调整（弧度）
+                # 最大附加航向限制
                 additional_heading_from_lateral = self.clamp(additional_heading_from_lateral, -max_additional_heading, max_additional_heading)
 
                 # 合并航向误差和横向误差转换的航向调整
@@ -952,22 +1085,31 @@ class DynamicGoalLineControllerWithWheelRotation:
                 rospy.loginfo("前进航向调整：航向误差=%.3f rad, 横向误差=%.3f m, 误差符号=%d, 附加航向调整=%.3f rad, 总航向调整=%.3f rad",
                              heading_error, lateral_error, error_sign, additional_heading_from_lateral, total_heading_adjustment)
                 
-                # 航向控制参数（增强航向控制，提高对角度偏差的敏感性）
+                # 航向控制参数（显著增强航向控制，确保机器人与路径严格平行）
+                # 为了确保机器人不倾斜，增强航向控制的敏感性和响应性
                 if lateral_error > self.max_lateral_error:
                     # 当横向偏差较大时，显著增强航向控制以快速纠正方向
-                    forward_kp_heading = self.kp_heading * 0.9  # 显著增加角度P增益
-                    forward_kd_heading = self.kd_heading * 1.2  # 显著增加角度D增益
-                    forward_ki_heading = self.ki_heading * 0.8  # 适当增加积分增益
-                    rospy.logwarn("前进模式紧急纠正：横向误差%.3f米超过2cm，增强航向控制增益！", lateral_error)
+                    forward_kp_heading = self.kp_heading * 1.2  # 显著增加角度P增益（从0.9到1.2）
+                    forward_kd_heading = self.kd_heading * 1.4  # 显著增加角度D增益（从1.2到1.4）
+                    forward_ki_heading = self.ki_heading * 1.0  # 增加积分增益（从0.8到1.0）
+                    rospy.logwarn("前进模式紧急纠正：横向误差%.3f米超过2cm，显著增强航向控制增益！", lateral_error)
                 elif lateral_error > self.max_lateral_error * 0.7:
-                    forward_kp_heading = self.kp_heading * 0.7  # 增加角度P增益
-                    forward_kd_heading = self.kd_heading * 1.0  # 增加角度D增益
-                    forward_ki_heading = self.ki_heading * 0.6  # 适当增加积分增益
-                    rospy.loginfo("前进模式增强纠正：横向误差%.3f米接近2cm，适度增强航向控制", lateral_error)
+                    forward_kp_heading = self.kp_heading * 0.9  # 增加角度P增益（从0.7到0.9）
+                    forward_kd_heading = self.kd_heading * 1.2  # 增加角度D增益（从1.0到1.2）
+                    forward_ki_heading = self.ki_heading * 0.8  # 增加积分增益（从0.6到0.8）
+                    rospy.loginfo("前进模式增强纠正：横向误差%.3f米接近2cm，增强航向控制", lateral_error)
                 else:
-                    forward_kp_heading = self.kp_heading * 0.5  # 标准角度P增益
-                    forward_kd_heading = self.kd_heading * 0.8  # 标准角度D增益
-                    forward_ki_heading = self.ki_heading * 0.4  # 减小角度积分增益
+                    forward_kp_heading = self.kp_heading * 1.0  # 保持标准P增益，增强响应
+                    forward_kd_heading = self.kd_heading * 1.8  # 提高标准角度D增益（原1.2→1.8），D/P≈0.72增强阻尼抑制终点摆动
+                    forward_ki_heading = self.ki_heading * 0.6  # 保持角度积分增益
+                
+                # 滑行区适度降低D增益，防止终点附近的振荡超调
+                if in_coasting_zone:
+                    forward_kd_heading *= 0.4   # D降为40%（从25%提高），保留一定阻尼
+                    forward_kp_heading *= 0.5   # P降为50%（从40%提高），保留一定纠正力
+                if in_arrival_zone:
+                    forward_kd_heading *= 0.15   # 到达区D大幅降低但非零
+                    forward_kp_heading *= 0.2    # 到达区P大幅降低但非零，保留微小纠正力
                 
                 # 对于四轮差速机器人，计算横向误差作为监控用途，但不用于直接控制
                 # 横向误差将被转换为航向调整
@@ -979,7 +1121,17 @@ class DynamicGoalLineControllerWithWheelRotation:
                 angular_correction = (forward_kp_heading * total_heading_adjustment + 
                                      forward_kd_heading * heading_error_rate +
                                      forward_ki_heading * self.heading_error_integral)
-                angular_correction = self.clamp(angular_correction, -self.max_vel_theta * 0.8, self.max_vel_theta * 0.8)  # 增加角度调整幅度限制
+                
+                # 滑行区角速度限幅与线速度联动：低速时低角速度
+                if in_coasting_zone:
+                    # 角速度最大值随线速度等比例缩放
+                    coasting_angular_limit = self.max_vel_theta * 0.2 * (abs(base_speed) / self.max_vel_x)
+                    angular_correction = self.clamp(angular_correction, -coasting_angular_limit, coasting_angular_limit)
+                elif in_arrival_zone:
+                    # 到达临界区允许微小角速度修正（最大0.05 rad/s），不完全归零
+                    angular_correction = self.clamp(angular_correction, -0.05, 0.05)
+                else:
+                    angular_correction = self.clamp(angular_correction, -self.max_vel_theta * 0.8, self.max_vel_theta * 0.8)
                 
                 # 重要：对于四轮差速机器人，不能直接横向移动，将linear.y设为0
                 cmd_vel.linear.x = base_speed
@@ -995,7 +1147,6 @@ class DynamicGoalLineControllerWithWheelRotation:
                     rospy.loginfo("前进控制: 速度=%.3f m/s, 横向校正=%.3f, 角度校正=%.3f rad/s, 横向误差=%.3f, 航向误差=%.2f°, 剩余距离=%.2f", 
                                  base_speed, lateral_correction, angular_correction, 
                                  lateral_error, math.degrees(heading_error), remaining_distance)
-        
         return cmd_vel
     
     def publish_line_marker(self):
@@ -1105,28 +1256,38 @@ class DynamicGoalLineControllerWithWheelRotation:
                     self.cmd_vel_pub.publish(cmd_vel)
                     return
             else:
-                rospy.loginfo("非平移运动到达目标点，直接清除目标")
-                self.has_goal = False
-                # 确保状态重置
-                if self.translation_state != 'IDLE':
-                    rospy.loginfo("重置状态到IDLE: %s -> IDLE", self.translation_state)
-                    self.translation_state = 'IDLE'
-                    # 确保切换到差速模式
-                    if self.set_kinematic_mode_service is not None:
-                        try:
-                            req = SetKinematicModeRequest()
-                            req.mode = 'differential'
-                            resp = self.set_kinematic_mode_service(req)
-                            if resp.success:
-                                rospy.loginfo("已确保切换到差速模式 (differential)")
-                            else:
-                                rospy.logwarn("确保切换到差速模式失败: %s", resp.message)
-                        except rospy.ServiceException as e:
-                            rospy.logerr("调用set_kinematic_mode服务失败: %s", e)
-                
-                cmd_vel = Twist()
-                self.cmd_vel_pub.publish(cmd_vel)
-                return
+                if self.is_final_waypoint:
+                    rospy.loginfo("非平移运动到达最终目标点，停车并清除目标")
+                    self.has_goal = False
+                    # 确保状态重置
+                    if self.translation_state != 'IDLE':
+                        rospy.loginfo("重置状态到IDLE: %s -> IDLE", self.translation_state)
+                        self.translation_state = 'IDLE'
+                        # 确保切换到差速模式
+                        if self.set_kinematic_mode_service is not None:
+                            try:
+                                req = SetKinematicModeRequest()
+                                req.mode = 'differential'
+                                resp = self.set_kinematic_mode_service(req)
+                                if resp.success:
+                                    rospy.loginfo("已确保切换到差速模式 (differential)")
+                                else:
+                                    rospy.logwarn("确保切换到差速模式失败: %s", resp.message)
+                            except rospy.ServiceException as e:
+                                rospy.logerr("调用set_kinematic_mode服务失败: %s", e)
+                    
+                    cmd_vel = Twist()
+                    self.cmd_vel_pub.publish(cmd_vel)
+                    return
+                else:
+                    rospy.loginfo("非平移运动到达中间目标点，不停车继续导航到下一个目标点")
+                    # 中间点到达时，不清除目标和状态，不发零速度命令
+                    # 保持has_goal = True，让控制器继续运行等待下一个目标点的到来
+                    # 重置积分项，避免旧误差影响下一个目标点的控制
+                    self.lateral_error_integral = 0.0
+                    self.heading_error_integral = 0.0
+                    self.initial_phase_start_time = rospy.get_time()
+                    return
         
         # 更新状态机
         state_cmd_vel = self.update_state_machine()
@@ -1154,17 +1315,68 @@ class DynamicGoalLineControllerWithWheelRotation:
         # 计算剩余距离
         self.remaining_distance = self.calculate_remaining_distance(x, y)
         
+        # 地面不平适应：误差平滑
+        self.lateral_error_history.append(lateral_error)
+        self.heading_error_history.append(heading_error)
+        
+        # 保持历史记录大小
+        if len(self.lateral_error_history) > self.error_history_size:
+            self.lateral_error_history.pop(0)
+        if len(self.heading_error_history) > self.error_history_size:
+            self.heading_error_history.pop(0)
+        
+        # 计算误差平滑值（指数移动平均）
+        if len(self.lateral_error_history) > 0:
+            self.smoothed_lateral_error = (
+                self.smoothed_lateral_error * (1.0 - self.error_smoothing_factor) +
+                lateral_error * self.error_smoothing_factor
+            )
+        if len(self.heading_error_history) > 0:
+            self.smoothed_heading_error = (
+                self.smoothed_heading_error * (1.0 - self.error_smoothing_factor) +
+                heading_error * self.error_smoothing_factor
+            )
+        
+        # 计算误差方差以检测地面不平
+        if len(self.lateral_error_history) >= 3:
+            lateral_mean = sum(self.lateral_error_history) / len(self.lateral_error_history)
+            lateral_variance = sum((e - lateral_mean) ** 2 for e in self.lateral_error_history) / len(self.lateral_error_history)
+            
+            # 根据误差方差调整自适应增益因子
+            if lateral_variance > self.error_variance_threshold:
+                # 误差方差大，地面不平，适度降低增益（从0.7提高到0.85，不过度压制）
+                self.adaptive_gain_factor = 0.85
+                rospy.loginfo_throttle(2.0, "检测到地面不平（误差方差=%.4f），降低增益因子到%.2f", 
+                                     lateral_variance, self.adaptive_gain_factor)
+            else:
+                # 误差方差小，地面平坦，使用正常增益
+                self.adaptive_gain_factor = 1.0
+        
+        # 使用平滑后的误差进行计算
+        smoothed_lateral_error = self.smoothed_lateral_error
+        smoothed_heading_error = self.smoothed_heading_error
+        
         # 计算偏差变化率
         current_time = rospy.get_time()
         dt = current_time - self.prev_time
         if dt > 0:
-            lateral_error_rate = (lateral_error - self.prev_lateral_error) / dt
-            heading_error_rate = (heading_error - self.prev_heading_error) / dt
+            lateral_error_rate = (smoothed_lateral_error - self.prev_lateral_error) / dt
+            heading_error_rate = (smoothed_heading_error - self.prev_heading_error) / dt
             
-            # 更新积分项
-            self.lateral_error_integral += lateral_error * dt
-            self.heading_error_integral += heading_error * dt
+            # 积分控制增强：添加积分死区
+            # 只有在误差大于死区时才积分，避免积分饱和
+            if abs(smoothed_lateral_error) > self.integral_deadzone:
+                self.lateral_error_integral += smoothed_lateral_error * dt
+            else:
+                # 误差很小时，重置积分项以避免过冲
+                self.lateral_error_integral *= 0.9  # 逐渐衰减
             
+            if abs(smoothed_heading_error) > self.integral_deadzone:
+                self.heading_error_integral += smoothed_heading_error * dt
+            else:
+                self.heading_error_integral *= 0.9  # 逐渐衰减
+            
+            # 应用积分限幅
             self.lateral_error_integral = self.clamp(self.lateral_error_integral, 
                                                     -self.integral_limit, self.integral_limit)
             self.heading_error_integral = self.clamp(self.heading_error_integral,
@@ -1174,10 +1386,17 @@ class DynamicGoalLineControllerWithWheelRotation:
             heading_error_rate = 0.0
         
         # 保存当前偏差和时间
-        self.prev_lateral_error = lateral_error
-        self.prev_heading_error = heading_error
+        self.prev_lateral_error = smoothed_lateral_error
+        self.prev_heading_error = smoothed_heading_error
         self.prev_time = current_time
-      
+        
+        # 应用自适应增益因子到控制参数
+        adaptive_kp_lateral = self.kp_lateral * self.adaptive_gain_factor
+        adaptive_kd_lateral = self.kd_lateral * self.adaptive_gain_factor
+        adaptive_ki_lateral = self.ki_lateral * self.adaptive_gain_factor
+        adaptive_kp_heading = self.kp_heading * self.adaptive_gain_factor
+        adaptive_kd_heading = self.kd_heading * self.adaptive_gain_factor
+        adaptive_ki_heading = self.ki_heading * self.adaptive_gain_factor
         
         # 检查是否处于暂停状态
         with self.pause_lock:
@@ -1197,14 +1416,28 @@ class DynamicGoalLineControllerWithWheelRotation:
                 # 简化处理，只实现holonomic模式
                 cmd_vel = Twist()
         
+        # 检查速度缩放因子是否超时
+        self.check_speed_factor_timeout()
+        
+        # 应用速度缩放因子到速度命令
+        cmd_vel = self.apply_speed_factor_to_cmd_vel(cmd_vel)
+        
+        # 发布偏差数据到话题
+        self.publish_error_data(
+            lateral_error=lateral_error,
+            heading_error=heading_error,
+            remaining_distance=self.remaining_distance
+        )
+        
         # 发布速度指令
         self.cmd_vel_pub.publish(cmd_vel)
         
         # 记录日志
         if current_time % 1.0 < 0.05:
             state_info = f"状态: {self.translation_state}" if self.translation_type else "状态: 一般运动"
-            rospy.loginfo("%s, 位置: (%.2f, %.2f), 偏航: %.2f, 横向偏差: %.3f, 航向偏差: %.3f, 剩余距离: %.2f",
-                         state_info, x, y, yaw, lateral_error, heading_error, self.remaining_distance)
+            speed_factor_info = f" (速度缩放因子: {self.get_current_speed_factor():.2f})"
+            rospy.loginfo("%s%s, 位置: (%.2f, %.2f), 偏航: %.2f, 横向偏差: %.3f, 航向偏差: %.3f, 剩余距离: %.2f",
+                         state_info, speed_factor_info, x, y, yaw, lateral_error, heading_error, self.remaining_distance)
     
     def record_path_point(self, x, y):
         """记录路径点"""
@@ -1240,6 +1473,41 @@ class DynamicGoalLineControllerWithWheelRotation:
         self.path_points = []
         self.last_recorded_point = None
     
+    def publish_error_data(self, lateral_error, heading_error, remaining_distance):
+        """发布偏差数据到话题 /navigation_errors"""
+        from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+        
+        # 创建多数组消息
+        error_msg = Float32MultiArray()
+        
+        # 设置布局（可选，但有助于理解数据）
+        # 数据包含：横向误差, 航向误差, 剩余距离, 运动模式标志
+        error_msg.layout.dim = []
+        
+        # 第一个维度：数据长度
+        dim = MultiArrayDimension()
+        dim.label = "error_data"
+        dim.size = 4  # 4个数据点
+        dim.stride = 4
+        error_msg.layout.dim.append(dim)
+        
+        # 确定运动模式：当机器人运动模式为前进后退时为0，平移模式设为1
+        # 根据代码逻辑，如果 self.translation_type 不为 None 且 self.translation_state 为 TRANSLATING，则是平移模式
+        motion_mode = 0  # 默认为前进/后退模式
+        if self.translation_type is not None and self.translation_state == 'TRANSLATING':
+            motion_mode = 1  # 平移模式
+        
+        # 填充数据
+        error_msg.data = [
+            lateral_error,           # 0: 横向误差 (m)
+            heading_error,           # 1: 航向误差 (rad)
+            remaining_distance,      # 2: 剩余距离 (m)
+            motion_mode              # 3: 运动模式标志 (0: 前进/后退, 1: 平移)
+        ]
+        
+        # 发布消息
+        self.error_pub.publish(error_msg)
+    
     def handle_pause_navigation(self, req):
         """处理暂停导航服务请求"""
         with self.pause_lock:
@@ -1258,6 +1526,99 @@ class DynamicGoalLineControllerWithWheelRotation:
             rospy.loginfo(f"暂停服务响应: {message}")
             return PauseNavigationResponse(success=True, message=message)
     
+    def speed_factor_callback(self, msg):
+        """速度缩放因子话题回调函数"""
+        with self.speed_factor_lock:
+            # 确保速度因子在合理范围内（0.0-2.0）
+            self.current_speed_factor = max(0.0, min(2.0, msg.data))
+            self.last_speed_factor_time = rospy.get_time()
+            rospy.loginfo_throttle(1.0, "接收到速度缩放因子: %.2f", self.current_speed_factor)
+    
+    def check_speed_factor_timeout(self):
+        """检查速度缩放因子是否超时 - 修改为永久保持当前速度因子，直到接收到新命令"""
+        # 永久保持当前速度因子，不触发超时恢复
+        # 这样可以确保机器人一直以当前设置的速度因子运行，直到用户发送新的速度因子
+        current_time = rospy.get_time()
+        with self.speed_factor_lock:
+            time_since_last_factor = current_time - self.last_speed_factor_time
+            
+            # 记录日志显示当前速度因子已保持的时间
+            if time_since_last_factor % 10.0 < 0.05:  # 每10秒记录一次
+                rospy.loginfo_throttle(10.0, "速度因子 %.2f 已保持 %.1f 秒，将持续保持直到接收新命令", 
+                                     self.current_speed_factor, time_since_last_factor)
+            
+            # 永远不触发超时恢复，保持当前速度因子
+            return False
+    
+    def get_current_speed_factor(self):
+        """获取当前速度缩放因子"""
+        with self.speed_factor_lock:
+            return self.current_speed_factor
+    
+    def apply_speed_factor_to_cmd_vel(self, cmd_vel):
+        """将速度缩放因子应用到速度命令"""
+        speed_factor = self.get_current_speed_factor()
+        
+        if speed_factor != 1.0:
+            # 应用速度缩放因子到所有速度分量
+            cmd_vel.linear.x *= speed_factor
+            cmd_vel.linear.y *= speed_factor
+            cmd_vel.angular.z *= speed_factor
+            
+            # 计算绝对最大限制：考虑缩放因子可以突破原始限制，但要有安全上限
+            # 对于高速情况（speed_factor > 1.0），允许速度适当超过原始最大限制
+            # 设置绝对上限为原始最大值的2倍，确保安全
+            absolute_max_vel_x = self.max_vel_x * 2.0
+            absolute_max_vel_y = self.max_vel_y * 2.0
+            absolute_max_vel_theta = self.max_vel_theta * 2.0
+            
+            # 确保缩放后的速度在绝对安全范围内
+            cmd_vel.linear.x = self.clamp(cmd_vel.linear.x, -absolute_max_vel_x, absolute_max_vel_x)
+            cmd_vel.linear.y = self.clamp(cmd_vel.linear.y, -absolute_max_vel_y, absolute_max_vel_y)
+            cmd_vel.angular.z = self.clamp(cmd_vel.angular.z, -absolute_max_vel_theta, absolute_max_vel_theta)
+            
+            rospy.loginfo_throttle(1.0, "应用速度缩放因子 %.2f: vx=%.3f->%.3f (最大%.1f), vy=%.3f->%.3f (最大%.1f), wz=%.3f->%.3f (最大%.1f)",
+                                 speed_factor, 
+                                 cmd_vel.linear.x / speed_factor if speed_factor != 0 else 0, cmd_vel.linear.x, absolute_max_vel_x,
+                                 cmd_vel.linear.y / speed_factor if speed_factor != 0 else 0, cmd_vel.linear.y, absolute_max_vel_y,
+                                 cmd_vel.angular.z / speed_factor if speed_factor != 0 else 0, cmd_vel.angular.z, absolute_max_vel_theta)
+        
+        return cmd_vel
+    
+    def get_speed_factor_adjusted_gains(self):
+        """获取根据速度缩放因子调整后的控制增益"""
+        speed_factor = self.get_current_speed_factor()
+        
+        # 当速度降低时，增加控制增益以保持响应性
+        # 但不要无限增加，设置合理的上限和下限
+        if speed_factor < 0.1:  # 避免除零
+            speed_factor = 0.1
+        
+        # 增益调整因子：速度越低，增益越高
+        # 使用平方根关系，避免增益变化过于剧烈
+        gain_adjustment = 1.0 / math.sqrt(speed_factor)
+        
+        # 限制增益调整范围：0.5到3.0倍
+        gain_adjustment = self.clamp(gain_adjustment, 0.5, 3.0)
+        
+        return {
+            'kp_lateral': self.kp_lateral * gain_adjustment,
+            'kd_lateral': self.kd_lateral * gain_adjustment,
+            'ki_lateral': self.ki_lateral * gain_adjustment,
+            'kp_heading': self.kp_heading * gain_adjustment,
+            'kd_heading': self.kd_heading * gain_adjustment,
+            'ki_heading': self.ki_heading * gain_adjustment,
+            'translation_kp': self.translation_kp * gain_adjustment,
+        }
+    
+    def final_waypoint_callback(self, msg):
+        """是否是最终路径点回调函数"""
+        self.is_final_waypoint = msg.data
+        if self.is_final_waypoint:
+            rospy.loginfo("收到最终路径点标志：这是最后一个目标点，到达后将停车")
+        else:
+            rospy.loginfo("收到最终路径点标志：这是中间目标点，到达后不停车继续导航")
+
     def shutdown_hook(self):
         """关闭钩子：节点停止时发送零速度"""
         rospy.loginfo("控制器正在关闭，发送零速度命令...")
@@ -1276,3 +1637,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# 与6-11相同
+
 import rospy
 import math
 from geometry_msgs.msg import Twist
@@ -122,7 +124,7 @@ class TwistToCarry:
             rospy.loginfo("Kinematic mode changed to: %s", self.kinematic_mode)
             return SetKinematicModeResponse(True, "Mode changed successfully")
         else:
-            return SetKinematicModeResponse(False, "Invalid mode. Use 'four_wheel_diff' or 'lateral'")
+            return SetKinematicModeResponse(False, "Invalid mode. Use 'four_wheel_diff', 'lateral', or 'omnidirectional'")
         
     def twist_callback(self, msg):
         """接收并存储目标速度，应用死区处理"""
@@ -266,6 +268,17 @@ class TwistToCarry:
             remote_msg.SW5 = 1700  # >1300 -> turn_flag = 3 (平移模式)
             # 调试信息：记录平移模式下的命令
             rospy.logdebug("Lateral mode: linear_y=%.3f, SW1=%d, SW2=%d", linear_y, sw1, sw2)
+        elif self.kinematic_mode == 'omni':
+            # 全向模式：使用 linear.x, linear.y 和 angular.z
+            # 所有车轮旋转到61度，然后根据速度方向驱动
+            sw1, sw2 = self._omni_command(linear_x, linear_y, angular_z)
+            remote_msg.SW1 = sw1
+            remote_msg.SW2 = sw2
+            remote_msg.SW3 = 1000
+            remote_msg.SW5 = 900   # 600-1200 -> turn_flag = 2 (全向模式)
+            # 调试信息：记录全向模式下的命令
+            rospy.logdebug("Omni mode: linear_x=%.3f, linear_y=%.3f, angular_z=%.3f, SW1=%d, SW2=%d", 
+                          linear_x, linear_y, angular_z, sw1, sw2)
         else:
             rospy.logwarn_throttle(1.0, "Unknown kinematic mode: %s, fallback four_wheel_diff", self.kinematic_mode)
             delta_rad, wheel_omega = self._ackermann_from_twist(linear_x, angular_z)
@@ -290,8 +303,12 @@ class TwistToCarry:
         """兼容旧模式名并返回规范化模式"""
         if mode_str in ['four_wheel_diff', 'ackermann', 'differential']:
             return 'four_wheel_diff'
-        if mode_str in ['lateral', 'omni', 'side']:
+        if mode_str in ['lateral', 'side', 'omni']:
+            # 注意：'omni' 原来映射到 lateral，保持向后兼容
             return 'lateral'
+        if mode_str in ['omnidirectional', 'all_wheel_steer']:
+            # 新增全向模式，使用新名称避免冲突
+            return 'omni'
         return None
 
     def _ackermann_from_twist(self, linear_x, angular_z):
@@ -307,10 +324,16 @@ class TwistToCarry:
         w = angular_z
 
         # 若线速度过小但有角速度，为避免除零，给一个最小虚拟速度
-        # 针对高速运动调整最小虚拟速度
-        min_v = 0.15  # 适当降低最小虚拟速度，提高高速运动灵活性
-        if abs(v) < min_v and abs(w) > 0.06:  # 进一步降低角速度触发阈值，提高转向灵敏度
-            v = math.copysign(min_v, w)  # 给一个最小速度以支持转向
+        # 【修复】使用线速度的符号而不是角速度的符号，避免角速度为负时错误触发倒车
+        # 原bug: v = math.copysign(min_v, w) 会导致机器人向后运动
+        min_v = 0.15  # 最小虚拟速度
+        if abs(v) < min_v and abs(w) > 0.06:  # 线速度太小但需要转向
+            # 如果线速度接近零但方向未知，默认保持向前
+            if abs(v) < 0.01:
+                v = min_v  # 默认向前
+            else:
+                v = math.copysign(min_v, v)  # 保持原线速度方向（前进或倒退）
+
 
         # 转角计算：delta = atan(L * w / v)
         delta = 0.0
@@ -432,6 +455,83 @@ class TwistToCarry:
 
         rospy.loginfo("平移模式命令：linear_y=%.3f, SW1=%d, SW2=%d", linear_y, sw1, sw2)
         return sw1, sw2
+    
+    def _omni_command(self, linear_x, linear_y, angular_z):
+        """
+        生成全向模式的 SW1/SW2
+        platform_control 逻辑：
+          - SW5在600-1200之间 -> turn_flag=2 (全向模式)
+          - 所有车轮旋转到61度（固定角度）
+          - 根据速度方向驱动车轮
+          
+        全向模式分析：
+          - 根据 main_2.cpp 代码，全向模式时：
+            Srl.TurnMotor_PositionChange_package((float)61.0,0);
+            Slq.TurnMotor_PositionChange_package((float)61.0,1);
+            Sll.TurnMotor_PositionChange_package((float)61.0,0);
+            Srq.TurnMotor_PositionChange_package((float)61.0,1);
+            
+            这意味着所有车轮都旋转到61度，但方向不同（0或1）
+            
+          - 驱动电机控制：
+            Frq.DriveMotor_SpeedChange((float)Veloicty,wheel_flag_R);
+            Flq.DriveMotor_SpeedChange((float)Veloicty,wheel_flag_R);
+            Frl.DriveMotor_SpeedChange((float)Veloicty,wheel_flag_R);
+            Fll.DriveMotor_SpeedChange((float)Veloicty,wheel_flag_R);
+            
+            所有车轮使用相同的速度和方向标志
+        """
+        # 全向模式下，SW1用于控制车轮旋转角度
+        # 根据 platform_control 代码，全向模式时 SW1 应该控制角度
+        # 但实际代码中全向模式是固定61度，所以我们需要设置一个合适的SW1值
+        
+        # 分析：在 main_2.cpp 中，全向模式时 SW1 用于控制 omiga_car 和 angle_turnmodel3
+        # 但全向模式时 turn_flag=2，不会使用 angle_turnmodel3
+        # 所以我们可以设置一个默认值，比如 1000（中立位置）
+        sw1 = 1000
+        
+        # 全向模式下，我们需要根据 linear_x, linear_y, angular_z 计算综合速度
+        # 简化处理：使用 linear_x 作为主要速度，linear_y 和 angular_z 作为辅助
+        # 实际上，全向模式应该支持任意方向移动，但这里简化实现
+        
+        # 计算综合速度大小
+        speed_magnitude = math.sqrt(linear_x**2 + linear_y**2)
+        
+        # 计算速度方向角度（相对于机器人前方）
+        if speed_magnitude > 0.001:
+            direction_angle = math.atan2(linear_y, linear_x)  # 弧度
+            # 将方向角度转换为车轮控制需要的参数
+            # 这里简化：使用 linear_x 作为主要控制
+            # 实际上需要更复杂的全向运动学转换
+            pass
+        
+        # 对于简化实现，我们主要使用 linear_x 控制前进/后退
+        # linear_y 控制左右平移，angular_z 控制旋转
+        
+        # 计算综合速度：结合线速度和角速度
+        # 角速度转换为等效线速度：v_angular = angular_z * 0.5（假设旋转半径0.5米）
+        v_angular = angular_z * 0.5
+        
+        # 综合速度 = 线速度 + 角速度等效线速度
+        # 这里简化：使用 linear_x 作为主要速度，加上角速度分量
+        combined_speed = linear_x + v_angular
+        
+        # 映射到 SW2
+        if abs(combined_speed) < self.deadzone_threshold:
+            sw2 = 1000  # 停止
+        else:
+            sw2 = 1000 + combined_speed * self.linear_scale
+            sw2 = self._clamp(int(sw2), 0, 2000)
+            
+            # 确保非零速度能够突破死区
+            if combined_speed > 0 and sw2 < 1010:
+                sw2 = 1010
+            elif combined_speed < 0 and sw2 > 990:
+                sw2 = 990
+        
+        rospy.loginfo("全向模式命令：linear_x=%.3f, linear_y=%.3f, angular_z=%.3f, SW1=%d, SW2=%d", 
+                     linear_x, linear_y, angular_z, sw1, sw2)
+        return sw1, sw2
         
 if __name__ == '__main__':
     try:
@@ -439,3 +539,4 @@ if __name__ == '__main__':
         rospy.spin()
     except rospy.ROSInterruptException:
         pass
+
